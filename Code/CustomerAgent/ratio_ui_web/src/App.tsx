@@ -11,6 +11,7 @@ import ChaLayout from './pages/customer-agent/ChaLayout';
 import ChaHomePage from './pages/customer-agent/ChaHomePage';
 import ChaScenariosPage from './pages/customer-agent/ChaScenariosPage';
 import ChaActivePage from './pages/customer-agent/ChaActivePage';
+import ChaLivePage from './pages/customer-agent/ChaLivePage';
 import ChaHistoryPage from './pages/customer-agent/ChaHistoryPage';
 import ChaAgentsPage from './pages/customer-agent/ChaAgentsPage';
 import ChaConfigPage from './pages/customer-agent/ChaConfigPage';
@@ -53,6 +54,7 @@ function AppLayout() {
           <Route path="/customer-agent" element={<ChaLayout />}>
             <Route index element={<ChaHomePage />} />
             <Route path="scenarios" element={<ChaScenariosPage />} />
+            <Route path="live" element={<ChaLivePage />} />
             <Route path="active" element={<ChaActivePage />} />
             <Route path="history" element={<ChaHistoryPage />} />
             <Route path="agents" element={<ChaAgentsPage />} />

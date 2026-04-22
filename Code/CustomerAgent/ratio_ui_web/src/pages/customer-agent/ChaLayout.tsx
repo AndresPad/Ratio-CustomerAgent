@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { getHealth } from '../../api/customerAgentClient';
+import { getLiveHealth } from '../../api/liveOrchestrationClient';
 import './cha-theme.css';
 
 const PAGE_TITLES: Record<string, string> = {
   '': 'Home',
   'scenarios': 'Simulation Scenarios',
+  'live': 'Live Agent Orchestration',
   'active': 'Active Investigation',
   'history': 'History',
   'agents': 'Agent Registry',
@@ -16,6 +17,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 const NAV = [
   { section: 'INVESTIGATIONS' },
+  { to: 'live', icon: 'fa-satellite-dish', label: 'Live Orchestration' },
   { to: 'scenarios', icon: 'fa-flask', label: 'Simulation Scenarios' },
   { to: 'active', icon: 'fa-play-circle', label: 'Active Investigation' },
   { to: 'history', icon: 'fa-history', label: 'History' },
@@ -36,7 +38,7 @@ export default function ChaLayout() {
   const pageTitle = PAGE_TITLES[segment] || 'Home';
 
   useEffect(() => {
-    getHealth()
+    getLiveHealth()
       .then(h => setConnected(h.status === 'healthy' || h.status === 'ok'))
       .catch(() => setConnected(false));
   }, []);
@@ -92,7 +94,6 @@ export default function ChaLayout() {
               <NavLink
                 key={item.to}
                 to={`/customer-agent/${item.to}`}
-                end={item.end}
                 className={({ isActive }) => `cha-nav-item${isActive ? ' active' : ''}`}
               >
                 <i className={`fas ${item.icon}`} />
