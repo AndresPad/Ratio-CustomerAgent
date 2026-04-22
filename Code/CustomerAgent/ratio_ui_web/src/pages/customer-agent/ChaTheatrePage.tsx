@@ -31,7 +31,18 @@
  * four-column stage (Signals · Hypotheses · Evidence · Actions) with a
  * running "executive ticker" of important milestones at the top.
  */
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
+import {
+  streamOrchestration,
+  type OrchestrationMode,
+} from '../../api/orchestrationSource';
+import {
+  DataSourceToggle,
+  loadStoredMode,
+  loadStoredXcv,
+  persistMode,
+  persistXcv,
+} from '../../components/DataSourceToggle';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 type RawEvent = Record<string, unknown> & {
@@ -472,51 +483,15 @@ function reduce(state: TheatreState, ev: RawEvent): TheatreState {
       detail: tickerDetail,
       ts: Date.now(),
     };
-    next.ticker = [entry, ...state.ticker].slice(0, 40);
+    next.ticker = [entry, ...state.ticker].slice(0, 200);
   }
 
   return next;
 }
 
 // ─── SSE helper ──────────────────────────────────────────────────────────
-async function* streamRunPipeline(
-  body: { customer_name?: string | null; service_tree_id?: string | null },
-  signal: AbortSignal,
-): AsyncGenerator<RawEvent> {
-  const res = await fetch('/customer-agent-api/api/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      while (buf.includes('\n\n')) {
-        const idx = buf.indexOf('\n\n');
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6);
-          if (payload.trim() === '[DONE]') return;
-          try {
-            yield JSON.parse(payload) as RawEvent;
-          } catch { /* ignore */ }
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
+// (moved to ../../api/orchestrationSource.ts — shared across pages with
+// mock/replay/live mode selection.)
 
 // ─── UI subcomponents ────────────────────────────────────────────────────
 function StageRail({ state }: { state: TheatreState }) {
@@ -618,6 +593,377 @@ function Ticker({ entries, running }: { entries: TickerEntry[]; running: boolean
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * ActivityFeed — Copilot-inspired "Details" panel. Instead of a flat log,
+ * leadership sees four collapsible sections that make the investigation
+ * immediately legible:
+ *
+ *   • Progress  — the 11-stage pipeline as a live checklist
+ *   • Agents    — which agents have participated and how active they are
+ *   • Skills    — tools/MCP skills invoked with invocation counts
+ *   • Activity  — chronological timeline (the raw ticker, newest first)
+ *
+ * Each section has a count badge and can be collapsed independently. The
+ * currently-running stage/agent is highlighted and animated.
+ */
+function ActivityFeed({ state, running }: { state: TheatreState; running: boolean }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({
+    progress: true, agents: true, skills: true, activity: true,
+  });
+  const toggle = (k: string) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+  };
+
+  // Derive agent participation from the ticker log (no reducer changes).
+  const agents = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; lastTs: number; lastAction: string }>();
+    const add = (name: string, ts: number, action: string) => {
+      if (!name || name === '?' || name === 'undefined' || name === 'agent') return;
+      const prev = map.get(name);
+      if (prev) {
+        prev.count += 1;
+        if (ts > prev.lastTs) { prev.lastTs = ts; prev.lastAction = action; }
+      } else {
+        map.set(name, { name, count: 1, lastTs: ts, lastAction: action });
+      }
+    };
+    for (const e of state.ticker) {
+      // "{agent} responded"
+      const m1 = e.title.match(/^(.+?)\s+responded$/);
+      if (m1) { add(m1[1], e.ts, 'responded'); continue; }
+      // "Speaker · {agent}"
+      const m2 = e.title.match(/^Speaker · (.+)$/);
+      if (m2) { add(m2[1], e.ts, 'selected as speaker'); continue; }
+      // PhaseTransition → detail holds agent
+      if (e.title.startsWith('Phase · ') && e.detail) { add(e.detail, e.ts, 'phase transition'); continue; }
+      // Tool calls → detail holds agent
+      if (e.title.startsWith('Tool · ') && e.detail) { add(e.detail, e.ts, `used ${e.title.replace('Tool · ', '')}`); continue; }
+    }
+    if (state.currentAgent) {
+      const prev = map.get(state.currentAgent);
+      if (!prev) map.set(state.currentAgent, { name: state.currentAgent, count: 1, lastTs: Date.now(), lastAction: 'active' });
+    }
+    return [...map.values()].sort((a, b) => b.lastTs - a.lastTs);
+  }, [state.ticker, state.currentAgent]);
+
+  const stages = STAGES;
+  const currentIdx = stages.findIndex(s => s.key === state.currentStage);
+  const tools = Object.values(state.tools).sort((a, b) => b.lastCall - a.lastCall);
+  const completed = !!state.completedAt;
+
+  return (
+    <div style={{
+      width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column',
+      background: 'var(--cha-bg-white)', border: '1px solid var(--cha-border)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '12px 14px', borderBottom: '1px solid var(--cha-border)',
+        display: 'flex', alignItems: 'center', gap: 8,
+        background: 'linear-gradient(135deg, #f9fafc 0%, #eef1f8 100%)',
+      }}>
+        <i className={`fas ${running ? 'fa-wave-square fa-fade' : completed ? 'fa-check-circle' : 'fa-list-ul'}`}
+           style={{ color: completed ? '#28a745' : '#4f6bed', fontSize: 15 }} />
+        <div style={{ fontWeight: 700, fontSize: 13 }}>Details</div>
+        <div style={{ flex: 1 }} />
+        {running && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+            background: '#e3f2fd', color: '#1565c0', textTransform: 'uppercase', letterSpacing: 0.5,
+          }}>
+            <i className="fas fa-circle" style={{ fontSize: 6, marginRight: 4, color: '#2196f3' }} />Live
+          </span>
+        )}
+        {completed && !running && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+            background: '#e8f5e9', color: '#2e7d32', textTransform: 'uppercase', letterSpacing: 0.5,
+          }}>
+            Done
+          </span>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* ── Progress ─────────────────────────────────────────── */}
+        <FeedSection
+          id="progress"
+          icon="fa-tasks"
+          title="Progress"
+          count={`${state.stagesTouched.size}/${stages.length}`}
+          open={open.progress}
+          onToggle={toggle}
+        >
+          {stages.map((s, i) => {
+            const isCurrent = state.currentStage === s.key && running;
+            const isDone = state.stagesTouched.has(s.key) && (completed || i < currentIdx);
+            const isTouched = state.stagesTouched.has(s.key);
+            const status: 'done' | 'current' | 'pending' =
+              isCurrent ? 'current' : isDone || (completed && isTouched) ? 'done' : 'pending';
+            return (
+              <div key={s.key} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '6px 14px', fontSize: 12,
+                opacity: status === 'pending' ? 0.45 : 1,
+                background: status === 'current' ? 'rgba(79, 107, 237, 0.08)' : 'transparent',
+                borderLeft: status === 'current' ? `3px solid ${s.color}` : '3px solid transparent',
+              }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 9, color: '#fff',
+                  background: status === 'done' ? '#28a745'
+                            : status === 'current' ? s.color
+                            : '#d0d7e2',
+                  animation: status === 'current' ? 'chaPulse 1.8s ease-in-out infinite' : 'none',
+                }}>
+                  <i className={`fas ${status === 'done' ? 'fa-check' : s.icon}`} />
+                </div>
+                <span style={{ flex: 1, fontWeight: status === 'current' ? 600 : 400 }}>{s.label}</span>
+                {status === 'current' && state.currentPhase && (
+                  <span style={{ fontSize: 10, color: 'var(--cha-text-muted)' }}>
+                    {state.currentPhase}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {state.decision && (
+            <div style={{
+              margin: '8px 14px 4px', padding: '6px 10px',
+              background: '#f1f8e9', border: '1px solid #c5e1a5', borderRadius: 6,
+              fontSize: 11, color: '#33691e',
+            }}>
+              <i className="fas fa-flag-checkered" style={{ marginRight: 6 }} />
+              Decision: <strong>{state.decision}</strong>
+            </div>
+          )}
+        </FeedSection>
+
+        {/* ── Agents ───────────────────────────────────────────── */}
+        <FeedSection
+          id="agents"
+          icon="fa-user-astronaut"
+          title="Agents"
+          count={String(agents.length)}
+          open={open.agents}
+          onToggle={toggle}
+        >
+          {agents.length === 0 ? (
+            <div style={{ padding: '6px 14px 10px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+              No agents have spoken yet.
+            </div>
+          ) : agents.map(a => {
+            const isActive = a.name === state.currentAgent && running;
+            return (
+              <div key={a.name} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '6px 14px', fontSize: 12,
+                background: isActive ? 'rgba(79, 107, 237, 0.06)' : 'transparent',
+              }}>
+                <div style={{
+                  width: 24, height: 24, borderRadius: '50%',
+                  background: isActive ? '#4f6bed' : '#e0e7ff',
+                  color: isActive ? '#fff' : '#4f6bed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 10, fontWeight: 700, flexShrink: 0,
+                  animation: isActive ? 'chaPulse 1.8s ease-in-out infinite' : 'none',
+                }}>
+                  {a.name.slice(0, 2).toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontWeight: isActive ? 600 : 500,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {a.name}
+                    {isActive && (
+                      <span style={{ marginLeft: 6, fontSize: 9, color: '#4f6bed', fontWeight: 700 }}>
+                        <i className="fas fa-circle fa-fade" style={{ fontSize: 6, marginRight: 3 }} />ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <div style={{
+                    fontSize: 10, color: 'var(--cha-text-muted)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {a.lastAction}
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 10,
+                  background: '#eef1f8', color: '#4f6bed', flexShrink: 0,
+                }}>
+                  ×{a.count}
+                </span>
+              </div>
+            );
+          })}
+        </FeedSection>
+
+        {/* ── Skills / Tools ────────────────────────────────────── */}
+        <FeedSection
+          id="skills"
+          icon="fa-toolbox"
+          title="Skills"
+          count={String(tools.length)}
+          open={open.skills}
+          onToggle={toggle}
+        >
+          {tools.length === 0 ? (
+            <div style={{ padding: '6px 14px 10px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+              No skills invoked yet.
+            </div>
+          ) : (
+            <div style={{ padding: '4px 14px 10px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {tools.map(t => (
+                <span key={t.tool} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '4px 8px', fontSize: 11, fontWeight: 500,
+                  background: '#eef5ff', color: '#1565c0',
+                  border: '1px solid #bbdefb', borderRadius: 12,
+                }}>
+                  <i className="fas fa-wrench" style={{ fontSize: 9 }} />
+                  {t.tool}
+                  {t.count > 1 && (
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8,
+                      background: '#1565c0', color: '#fff',
+                    }}>
+                      {t.count}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+          )}
+          {state.expectedEvidence > 0 && (
+            <div style={{ padding: '0 14px 10px' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                fontSize: 10, color: 'var(--cha-text-muted)', marginBottom: 3,
+              }}>
+                <span>Evidence collected</span>
+                <span><strong>{state.collectedEvidence}</strong> / {state.expectedEvidence}</span>
+              </div>
+              <div style={{ height: 4, background: '#eef1f8', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, (state.collectedEvidence / state.expectedEvidence) * 100)}%`,
+                  height: '100%', background: 'linear-gradient(90deg, #4f6bed 0%, #16a085 100%)',
+                  transition: 'width 0.3s ease',
+                }} />
+              </div>
+            </div>
+          )}
+        </FeedSection>
+
+        {/* ── Activity timeline ───────────────────────────────── */}
+        <FeedSection
+          id="activity"
+          icon="fa-stream"
+          title="Activity"
+          count={String(state.ticker.length)}
+          open={open.activity}
+          onToggle={toggle}
+          last
+        >
+          {state.ticker.length === 0 ? (
+            <div style={{ padding: '6px 14px 10px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+              Waiting for pipeline events…
+            </div>
+          ) : state.ticker.slice(0, 30).map((e, i) => (
+            <div key={e.id} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8,
+              padding: '6px 14px',
+              borderLeft: `3px solid ${e.color}`,
+              background: i === 0 && running ? 'rgba(79, 107, 237, 0.05)' : 'transparent',
+              animation: i === 0 ? 'chaSlideIn 0.3s ease' : 'none',
+            }}>
+              <i className={`fas ${e.icon}`} style={{
+                color: e.color, fontSize: 11, marginTop: 3, width: 14, textAlign: 'center', flexShrink: 0,
+              }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: 11, fontWeight: 600,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {e.title}
+                </div>
+                {e.detail && (
+                  <div style={{
+                    fontSize: 10, color: 'var(--cha-text-muted)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {e.detail}
+                  </div>
+                )}
+              </div>
+              <div style={{
+                fontSize: 9, color: 'var(--cha-text-muted)', fontFamily: 'ui-monospace, monospace',
+                flexShrink: 0, marginTop: 3,
+              }}>
+                {fmtTime(e.ts)}
+              </div>
+            </div>
+          ))}
+          {state.ticker.length > 30 && (
+            <div style={{ padding: '4px 14px 10px', fontSize: 10, color: 'var(--cha-text-muted)', textAlign: 'center' }}>
+              +{state.ticker.length - 30} earlier events
+            </div>
+          )}
+        </FeedSection>
+      </div>
+    </div>
+  );
+}
+
+function FeedSection({
+  id, icon, title, count, open, onToggle, last, children,
+}: {
+  id: string;
+  icon: string;
+  title: string;
+  count?: string;
+  open: boolean;
+  onToggle: (id: string) => void;
+  last?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ borderBottom: last ? 'none' : '1px solid var(--cha-border)' }}>
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        style={{
+          width: '100%', padding: '10px 14px',
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: 700, color: 'var(--cha-text-primary)',
+          textAlign: 'left',
+        }}
+      >
+        <i className={`fas ${icon}`} style={{ color: '#4f6bed', fontSize: 12, width: 14, textAlign: 'center' }} />
+        <span style={{ flex: 1 }}>{title}</span>
+        {count !== undefined && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+            background: '#eef1f8', color: '#4f6bed',
+          }}>
+            {count}
+          </span>
+        )}
+        <i className={`fas fa-chevron-${open ? 'up' : 'down'}`}
+           style={{ fontSize: 10, color: 'var(--cha-text-muted)' }} />
+      </button>
+      {open && <div style={{ paddingBottom: 6 }}>{children}</div>}
     </div>
   );
 }
@@ -837,31 +1183,55 @@ function ProgressBar({ pct, color, label, tall }: { pct: number; color: string; 
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────
-const SCENARIO_PRESETS = [
-  { id: 'live',         label: 'Live sweep (default)',     body: {} },
-  { id: 'blackrock',    label: 'BlackRock ScaleSet',       body: { customer_name: 'BlackRock, Inc', service_tree_id: '49c39e84-285c-45e1-9008-ac6b217161e2' } },
+const LIVE_SCENARIOS = [
+  { id: 'default',      label: 'Default sweep',         body: {} },
+  { id: 'blackrock',    label: 'BlackRock ScaleSet',    body: { customer_name: 'BlackRock, Inc', service_tree_id: '49c39e84-285c-45e1-9008-ac6b217161e2' } },
 ] as const;
 
 export default function ChaTheatrePage() {
   const [state, setState] = useState<TheatreState>(emptyState());
   const [running, setRunning] = useState(false);
-  const [preset, setPreset] = useState<typeof SCENARIO_PRESETS[number]['id']>('live');
+  const [mode, setMode] = useState<OrchestrationMode>(() => loadStoredMode('mock'));
+  const [xcv, setXcv] = useState<string>(() => loadStoredXcv());
+  const [liveScenario, setLiveScenario] = useState<typeof LIVE_SCENARIOS[number]['id']>('default');
+  const [showActivity, setShowActivity] = useState<boolean>(() => {
+    try { return localStorage.getItem('cha.theatre.activityFeed') !== '0'; }
+    catch { return true; }
+  });
   const abortRef = useRef<AbortController | null>(null);
 
+  useEffect(() => { persistMode(mode); }, [mode]);
+  useEffect(() => { persistXcv(xcv); }, [xcv]);
+  useEffect(() => {
+    try { localStorage.setItem('cha.theatre.activityFeed', showActivity ? '1' : '0'); }
+    catch { /* noop */ }
+  }, [showActivity]);
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const start = useCallback(async () => {
     if (running) return;
+    if (mode === 'replay' && !xcv) {
+      setState(prev => ({ ...prev, error: 'Paste an xcv to replay.' }));
+      return;
+    }
     setState(emptyState());
     setRunning(true);
     const ctrl = new AbortController();
     abortRef.current?.abort();
     abortRef.current = ctrl;
-    const body = SCENARIO_PRESETS.find(s => s.id === preset)?.body || {};
 
+    const liveBody = LIVE_SCENARIOS.find(s => s.id === liveScenario)?.body || {};
     try {
-      for await (const ev of streamRunPipeline(body, ctrl.signal)) {
-        setState(prev => reduce(prev, ev));
+      for await (const ev of streamOrchestration(
+        {
+          mode,
+          xcv: xcv || undefined,
+          customer_name: mode === 'live' ? (liveBody as { customer_name?: string }).customer_name : undefined,
+          service_tree_id: mode === 'live' ? (liveBody as { service_tree_id?: string }).service_tree_id : undefined,
+        },
+        ctrl.signal,
+      )) {
+        setState(prev => reduce(prev, ev as RawEvent));
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
@@ -870,7 +1240,7 @@ export default function ChaTheatrePage() {
     } finally {
       setRunning(false);
     }
-  }, [running, preset]);
+  }, [running, mode, xcv, liveScenario]);
 
   const stop = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; }, []);
 
@@ -894,15 +1264,24 @@ export default function ChaTheatrePage() {
           Live Signal → Hypothesis → Evidence → Action
         </div>
         <div style={{ flex: 1 }} />
-        <select
-          value={preset}
-          onChange={e => setPreset(e.target.value as typeof preset)}
+        <DataSourceToggle
+          mode={mode}
+          xcv={xcv}
           disabled={running}
-          style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6,
-                   border: '1px solid var(--cha-border)' }}
-        >
-          {SCENARIO_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-        </select>
+          onModeChange={setMode}
+          onXcvChange={setXcv}
+        />
+        {mode === 'live' && (
+          <select
+            value={liveScenario}
+            onChange={e => setLiveScenario(e.target.value as typeof liveScenario)}
+            disabled={running}
+            style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6,
+                     border: '1px solid var(--cha-border)' }}
+          >
+            {LIVE_SCENARIOS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        )}
         {state.xcv && (
           <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--cha-text-muted)' }}>
             XCV {state.xcv.slice(0, 8)}
@@ -911,6 +1290,19 @@ export default function ChaTheatrePage() {
         <span style={{ fontSize: 11, color: 'var(--cha-text-muted)' }}>
           <i className="fas fa-clock" /> {durationSecs}s
         </span>
+        <button
+          onClick={() => setShowActivity(v => !v)}
+          title={showActivity ? 'Hide activity feed' : 'Show activity feed'}
+          style={{
+            padding: '6px 10px', fontSize: 12, borderRadius: 6,
+            border: '1px solid var(--cha-border)',
+            background: showActivity ? '#eef1f8' : 'var(--cha-bg-white)',
+            color: showActivity ? '#4f6bed' : 'var(--cha-text-muted)',
+            cursor: 'pointer', fontWeight: 600,
+          }}
+        >
+          <i className="fas fa-list-ul" /> Activity
+        </button>
         {running ? (
           <button onClick={stop} className="cha-btn-run"
                   style={{ background: 'var(--cha-danger)', color: '#fff' }}>
@@ -947,12 +1339,13 @@ export default function ChaTheatrePage() {
         </div>
       )}
 
-      {/* Four-column stage */}
+      {/* Four-column stage + optional activity feed */}
       <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
         <SignalColumn signals={state.signals} decision={state.decision} />
         <HypothesisColumn state={state} />
         <EvidenceColumn state={state} />
         <ToolsActionsColumn state={state} />
+        {showActivity && <ActivityFeed state={state} running={running} />}
       </div>
     </div>
   );

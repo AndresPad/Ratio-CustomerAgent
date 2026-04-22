@@ -16,10 +16,15 @@
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import {
-  streamPipeline,
+  kindOf,
   type LiveEvent,
+  type RawLiveEvent,
   type RunPipelineRequest,
 } from '../api/liveOrchestrationClient';
+import {
+  streamOrchestration,
+  type OrchestrationMode,
+} from '../api/orchestrationSource';
 
 /** The 7 executive-visible stages of the orchestration. */
 export const STAGES = [
@@ -590,9 +595,16 @@ function reduceEvent(state: LiveState, evt: LiveEvent): LiveState {
   }
 }
 
+export interface LiveStartOptions extends RunPipelineRequest {
+  /** Event source — 'live' (default), 'replay', or 'mock'. */
+  mode?: OrchestrationMode;
+  /** Correlation id required when mode is 'replay'. */
+  xcv?: string;
+}
+
 export interface UseLiveInvestigation {
   state: LiveState;
-  start: (req?: RunPipelineRequest) => Promise<void>;
+  start: (opts?: LiveStartOptions) => Promise<void>;
   stop: () => void;
   reset: () => void;
 }
@@ -612,15 +624,22 @@ export function useLiveInvestigation(): UseLiveInvestigation {
     abortRef.current = null;
   }, []);
 
-  const start = useCallback(async (req: RunPipelineRequest = {}) => {
+  const start = useCallback(async (opts: LiveStartOptions = {}) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     dispatch({ type: 'reset' });
 
+    const { mode = 'live', xcv, customer_name, service_tree_id } = opts;
+
     try {
-      for await (const evt of streamPipeline(req, ctrl.signal)) {
-        dispatch({ type: 'event', event: evt });
+      for await (const evt of streamOrchestration(
+        { mode, xcv, customer_name, service_tree_id },
+        ctrl.signal,
+      )) {
+        const raw = evt as RawLiveEvent;
+        const normalized: LiveEvent = { ...raw, kind: kindOf(raw), receivedAt: Date.now() };
+        dispatch({ type: 'event', event: normalized });
       }
       dispatch({ type: 'finish' });
     } catch (err: unknown) {

@@ -24,8 +24,17 @@ import {
   type SignalTypeRow,
   type CompoundRow,
   type Stage,
+  type LiveState,
 } from '../../hooks/useLiveInvestigation';
 import type { LiveEvent } from '../../api/liveOrchestrationClient';
+import type { OrchestrationMode } from '../../api/orchestrationSource';
+import {
+  DataSourceToggle,
+  loadStoredMode,
+  loadStoredXcv,
+  persistMode,
+  persistXcv,
+} from '../../components/DataSourceToggle';
 
 /* ─────────────────────────────────────────────────────────────── */
 /* Small presentational building blocks                            */
@@ -281,33 +290,388 @@ function summarizeEvent(evt: LiveEvent): { title: string; body?: string } {
   }
 }
 
-function ActivityFeed({ events }: { events: LiveEvent[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' });
-  }, [events.length]);
-  // Show the last ~80 meaningful events only.
-  const HIDE = new Set(['LLMCall', 'investigation_agent_chunk', 'investigation_stall_warning', 'investigation_agent_start', 'SymptomTemplatesLoaded', 'OutputParsed']);
-  const shown = events.filter(e => !HIDE.has(e.kind)).slice(-80);
-  if (shown.length === 0) {
-    return <div className="cha-live-empty">No activity yet — click <strong>Start Investigation</strong> to begin.</div>;
-  }
+function ActivityFeed({ state }: { state: LiveState }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({
+    progress: true, agents: true, skills: true, activity: true,
+  });
+  const toggle = (k: string) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
+
+  const running = state.running;
+  const completed = state.done;
+
+  // Hidden noisy kinds — same list we used before.
+  const HIDE = useMemo(
+    () => new Set(['LLMCall', 'investigation_agent_chunk', 'investigation_stall_warning', 'investigation_agent_start', 'SymptomTemplatesLoaded', 'OutputParsed']),
+    [],
+  );
+  const visible = useMemo(() => state.events.filter(e => !HIDE.has(e.kind)), [state.events, HIDE]);
+  const timeline = useMemo(() => [...visible].reverse().slice(0, 30), [visible]);
+
+  // Aggregate agent participation from agentTurns + speaker reasons.
+  const agents = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; lastTs: number; lastAction: string }>();
+    for (const t of state.agentTurns) {
+      if (!t.agent) continue;
+      const prev = map.get(t.agent);
+      const action = t.phase ? `responded in ${t.phase}` : 'responded';
+      if (prev) {
+        prev.count += 1;
+        if (t.ts > prev.lastTs) { prev.lastTs = t.ts; prev.lastAction = action; }
+      } else {
+        map.set(t.agent, { name: t.agent, count: 1, lastTs: t.ts, lastAction: action });
+      }
+    }
+    for (const c of state.toolCalls) {
+      if (!c.agent) continue;
+      const prev = map.get(c.agent);
+      const action = `used ${c.tool}`;
+      if (prev) {
+        if (c.ts > prev.lastTs) { prev.lastTs = c.ts; prev.lastAction = action; }
+      } else {
+        map.set(c.agent, { name: c.agent, count: 1, lastTs: c.ts, lastAction: action });
+      }
+    }
+    if (state.currentSpeaker && !map.has(state.currentSpeaker)) {
+      map.set(state.currentSpeaker, { name: state.currentSpeaker, count: 0, lastTs: Date.now(), lastAction: 'selected as speaker' });
+    }
+    return [...map.values()].sort((a, b) => b.lastTs - a.lastTs);
+  }, [state.agentTurns, state.toolCalls, state.currentSpeaker]);
+
+  // Unique skills/tools with invocation counts.
+  const skills = useMemo(() => {
+    const map = new Map<string, { tool: string; count: number; errors: number; lastTs: number }>();
+    for (const c of state.toolCalls) {
+      if (!c.tool) continue;
+      const prev = map.get(c.tool);
+      if (prev) {
+        prev.count += 1;
+        if (c.error) prev.errors += 1;
+        if (c.ts > prev.lastTs) prev.lastTs = c.ts;
+      } else {
+        map.set(c.tool, { tool: c.tool, count: 1, errors: c.error ? 1 : 0, lastTs: c.ts });
+      }
+    }
+    return [...map.values()].sort((a, b) => b.lastTs - a.lastTs);
+  }, [state.toolCalls]);
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+  };
+
+  const currentIdx = STAGES.indexOf(state.stage);
+
   return (
-    <div ref={ref} style={{ maxHeight: 520, overflowY: 'auto' }}>
-      {shown.map((evt, i) => {
-        const { title, body } = summarizeEvent(evt);
-        const cat = feedCategory(evt);
-        const time = new Date(evt.receivedAt).toLocaleTimeString();
-        return (
-          <div key={`${evt.receivedAt}-${i}`} className={`cha-feed-item ${cat}`}>
-            <div className="fi-header">
-              <span className="fi-title">{title}</span>
-              <span className="fi-kind">{evt.kind} · {time}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 400 }}>
+      {/* Header pill row */}
+      <div style={{
+        padding: '4px 0 10px', display: 'flex', alignItems: 'center', gap: 8,
+        borderBottom: '1px solid var(--cha-border)', marginBottom: 6,
+      }}>
+        {running && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+            background: '#e3f2fd', color: '#1565c0', textTransform: 'uppercase', letterSpacing: 0.5,
+          }}>
+            <i className="fas fa-circle" style={{ fontSize: 6, marginRight: 4, color: '#2196f3' }} />Live
+          </span>
+        )}
+        {completed && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+            background: '#e8f5e9', color: '#2e7d32', textTransform: 'uppercase', letterSpacing: 0.5,
+          }}>Done</span>
+        )}
+        {state.currentPhase && (
+          <span style={{ fontSize: 11, color: 'var(--cha-text-muted)' }}>
+            Phase: <strong style={{ color: 'var(--cha-text-primary)' }}>{state.currentPhase}</strong>
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        {state.xcv && (
+          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, color: 'var(--cha-text-muted)' }}>
+            XCV {state.xcv.slice(0, 8)}
+          </span>
+        )}
+      </div>
+
+      {/* ── Progress ─────────────────────────────────────────── */}
+      <FeedSection
+        id="progress"
+        icon="fa-tasks"
+        title="Progress"
+        count={`${state.stagesReached.length}/${STAGES.length}`}
+        open={open.progress}
+        onToggle={toggle}
+      >
+        {STAGES.map((s, i) => {
+          const isCurrent = state.stage === s && running;
+          const isDone = state.stagesReached.includes(s) && (completed || i < currentIdx);
+          const status: 'done' | 'current' | 'pending' =
+            isCurrent ? 'current'
+            : isDone || (completed && state.stagesReached.includes(s)) ? 'done'
+            : 'pending';
+          return (
+            <div key={s} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '6px 2px', fontSize: 12,
+              opacity: status === 'pending' ? 0.45 : 1,
+              background: status === 'current' ? 'rgba(79, 107, 237, 0.08)' : 'transparent',
+              borderLeft: status === 'current' ? '3px solid var(--cha-primary)' : '3px solid transparent',
+              paddingLeft: 8,
+            }}>
+              <div style={{
+                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 9, color: '#fff',
+                background: status === 'done' ? '#28a745'
+                          : status === 'current' ? 'var(--cha-primary)'
+                          : '#d0d7e2',
+                animation: status === 'current' ? 'chaPulseLive 1.8s ease-in-out infinite' : 'none',
+              }}>
+                <i className={`fas ${status === 'done' ? 'fa-check' : STAGE_ICONS[s]}`} />
+              </div>
+              <span style={{ flex: 1, fontWeight: status === 'current' ? 600 : 400 }}>
+                {STAGE_LABELS[s]}
+              </span>
+              {status === 'current' && state.stageProgress > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--cha-text-muted)' }}>
+                  {Math.round(state.stageProgress)}%
+                </span>
+              )}
             </div>
-            {body && <div className="fi-body">{body}</div>}
+          );
+        })}
+        {state.signalDecision && (
+          <div style={{
+            margin: '8px 0 4px', padding: '6px 10px',
+            background: '#f1f8e9', border: '1px solid #c5e1a5', borderRadius: 6,
+            fontSize: 11, color: '#33691e',
+          }}>
+            <i className="fas fa-flag-checkered" style={{ marginRight: 6 }} />
+            Signal decision: <strong>{state.signalDecision.action}</strong>
+            &nbsp;· {state.signalDecision.signal_count} signals, {state.signalDecision.compound_count} compounds
           </div>
-        );
-      })}
+        )}
+      </FeedSection>
+
+      {/* ── Agents ──────────────────────────────────────────── */}
+      <FeedSection
+        id="agents"
+        icon="fa-user-astronaut"
+        title="Agents"
+        count={String(agents.length)}
+        open={open.agents}
+        onToggle={toggle}
+      >
+        {agents.length === 0 ? (
+          <div style={{ padding: '4px 2px 8px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+            No agents have spoken yet.
+          </div>
+        ) : agents.map(a => {
+          const isActive = a.name === state.currentSpeaker && running;
+          return (
+            <div key={a.name} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '6px 2px', fontSize: 12,
+              background: isActive ? 'rgba(79, 107, 237, 0.06)' : 'transparent',
+              paddingLeft: 8,
+            }}>
+              <div style={{
+                width: 24, height: 24, borderRadius: '50%',
+                background: isActive ? 'var(--cha-primary)' : '#e0e7ff',
+                color: isActive ? '#fff' : 'var(--cha-primary)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 10, fontWeight: 700, flexShrink: 0,
+                animation: isActive ? 'chaPulseLive 1.8s ease-in-out infinite' : 'none',
+              }}>
+                {a.name.slice(0, 2).toUpperCase()}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontWeight: isActive ? 600 : 500,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {a.name}
+                  {isActive && (
+                    <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--cha-primary)', fontWeight: 700 }}>
+                      <i className="fas fa-circle fa-fade" style={{ fontSize: 6, marginRight: 3 }} />ACTIVE
+                    </span>
+                  )}
+                </div>
+                <div style={{
+                  fontSize: 10, color: 'var(--cha-text-muted)',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {a.lastAction}
+                </div>
+              </div>
+              {a.count > 0 && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 10,
+                  background: '#eef1f8', color: 'var(--cha-primary)', flexShrink: 0,
+                }}>
+                  ×{a.count}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </FeedSection>
+
+      {/* ── Skills ──────────────────────────────────────────── */}
+      <FeedSection
+        id="skills"
+        icon="fa-toolbox"
+        title="Skills"
+        count={String(skills.length)}
+        open={open.skills}
+        onToggle={toggle}
+      >
+        {skills.length === 0 ? (
+          <div style={{ padding: '4px 2px 8px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+            No skills invoked yet.
+          </div>
+        ) : (
+          <div style={{ padding: '2px 0 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {skills.map(t => (
+              <span key={t.tool} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '4px 8px', fontSize: 11, fontWeight: 500,
+                background: t.errors ? '#ffebee' : '#eef5ff',
+                color: t.errors ? '#c62828' : '#1565c0',
+                border: `1px solid ${t.errors ? '#ffcdd2' : '#bbdefb'}`,
+                borderRadius: 12,
+              }}>
+                <i className={`fas ${t.errors ? 'fa-triangle-exclamation' : 'fa-wrench'}`} style={{ fontSize: 9 }} />
+                {t.tool}
+                {t.count > 1 && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8,
+                    background: t.errors ? '#c62828' : '#1565c0', color: '#fff',
+                  }}>
+                    {t.count}
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+        {state.evidenceCycles > 0 && (
+          <div style={{ padding: '4px 0 6px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontSize: 10, color: 'var(--cha-text-muted)', marginBottom: 3,
+            }}>
+              <span>Evidence progress</span>
+              <span><strong>{state.evidenceCycles}</strong> cycle{state.evidenceCycles === 1 ? '' : 's'}</span>
+            </div>
+            <div style={{ height: 4, background: '#eef1f8', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                width: `${Math.min(100, state.evidenceProgress * 100)}%`,
+                height: '100%', background: 'linear-gradient(90deg, var(--cha-primary) 0%, #16a085 100%)',
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+          </div>
+        )}
+      </FeedSection>
+
+      {/* ── Activity timeline ───────────────────────────────── */}
+      <FeedSection
+        id="activity"
+        icon="fa-stream"
+        title="Activity"
+        count={String(visible.length)}
+        open={open.activity}
+        onToggle={toggle}
+        last
+      >
+        {timeline.length === 0 ? (
+          <div style={{ padding: '4px 2px 8px', fontSize: 11, color: 'var(--cha-text-muted)', fontStyle: 'italic' }}>
+            No activity yet — click <strong>Start Investigation</strong> to begin.
+          </div>
+        ) : timeline.map((evt, i) => {
+          const { title, body } = summarizeEvent(evt);
+          const cat = feedCategory(evt);
+          return (
+            <div
+              key={`${evt.receivedAt}-${i}`}
+              className={`cha-feed-item ${cat}`}
+              style={{
+                margin: '4px 0', padding: '6px 8px',
+                background: i === 0 && running ? 'rgba(79, 107, 237, 0.05)' : undefined,
+                animation: i === 0 ? 'chaSlideInLive 0.3s ease' : undefined,
+              }}
+            >
+              <div className="fi-header" style={{ fontSize: 11 }}>
+                <span className="fi-title" style={{ fontWeight: 600 }}>{title}</span>
+                <span className="fi-kind" style={{ fontSize: 9 }}>{fmtTime(evt.receivedAt)}</span>
+              </div>
+              {body && <div className="fi-body" style={{ fontSize: 10 }}>{body}</div>}
+            </div>
+          );
+        })}
+        {visible.length > 30 && (
+          <div style={{ padding: '4px 2px', fontSize: 10, color: 'var(--cha-text-muted)', textAlign: 'center' }}>
+            +{visible.length - 30} earlier events
+          </div>
+        )}
+      </FeedSection>
+
+      <style>{`
+        @keyframes chaPulseLive {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50%      { transform: scale(1.15); opacity: 0.85; }
+        }
+        @keyframes chaSlideInLive {
+          from { opacity: 0; transform: translateX(-4px); }
+          to   { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function FeedSection({
+  id, icon, title, count, open, onToggle, last, children,
+}: {
+  id: string;
+  icon: string;
+  title: string;
+  count?: string;
+  open: boolean;
+  onToggle: (id: string) => void;
+  last?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ borderBottom: last ? 'none' : '1px solid var(--cha-border)' }}>
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        style={{
+          width: '100%', padding: '10px 2px',
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: 700, color: 'var(--cha-text-primary)',
+          textAlign: 'left',
+        }}
+      >
+        <i className={`fas ${icon}`} style={{ color: 'var(--cha-primary)', fontSize: 12, width: 14, textAlign: 'center' }} />
+        <span style={{ flex: 1 }}>{title}</span>
+        {count !== undefined && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+            background: '#eef1f8', color: 'var(--cha-primary)',
+          }}>
+            {count}
+          </span>
+        )}
+        <i className={`fas fa-chevron-${open ? 'up' : 'down'}`}
+           style={{ fontSize: 10, color: 'var(--cha-text-muted)' }} />
+      </button>
+      {open && <div style={{ paddingBottom: 8 }}>{children}</div>}
     </div>
   );
 }
@@ -320,6 +684,19 @@ export default function ChaLivePage() {
   const { state, start, stop, reset } = useLiveInvestigation();
   const [customer, setCustomer] = useState('');
   const [serviceTreeId, setServiceTreeId] = useState('');
+  const [mode, setMode] = useState<OrchestrationMode>(() => loadStoredMode('mock'));
+  const [xcv, setXcv] = useState<string>(() => loadStoredXcv());
+  const [summaryOpen, setSummaryOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('cha.live.summaryOpen') !== '0'; }
+    catch { return true; }
+  });
+
+  useEffect(() => { persistMode(mode); }, [mode]);
+  useEffect(() => { persistXcv(xcv); }, [xcv]);
+  useEffect(() => {
+    try { localStorage.setItem('cha.live.summaryOpen', summaryOpen ? '1' : '0'); }
+    catch { /* noop */ }
+  }, [summaryOpen]);
 
   const selected = useMemo(
     () => state.hypotheses.find(h => h.hypothesis_id === state.selectedHypothesisId),
@@ -370,27 +747,42 @@ export default function ChaLivePage() {
           </div>
         </div>
         <div className="cha-live-controls">
-          <input
-            value={customer}
-            onChange={e => setCustomer(e.target.value)}
-            placeholder="customer (optional)"
+          <DataSourceToggle
+            mode={mode}
+            xcv={xcv}
             disabled={state.running}
+            onModeChange={setMode}
+            onXcvChange={setXcv}
           />
-          <input
-            value={serviceTreeId}
-            onChange={e => setServiceTreeId(e.target.value)}
-            placeholder="service_tree_id (optional)"
-            disabled={state.running}
-          />
+          {mode === 'live' && (
+            <>
+              <input
+                value={customer}
+                onChange={e => setCustomer(e.target.value)}
+                placeholder="customer (optional)"
+                disabled={state.running}
+              />
+              <input
+                value={serviceTreeId}
+                onChange={e => setServiceTreeId(e.target.value)}
+                placeholder="service_tree_id (optional)"
+                disabled={state.running}
+              />
+            </>
+          )}
           {!state.running ? (
             <button
               className="btn-go"
               onClick={() =>
                 start({
-                  customer_name: customer.trim() || undefined,
-                  service_tree_id: serviceTreeId.trim() || undefined,
+                  mode,
+                  xcv: xcv || undefined,
+                  customer_name: mode === 'live' ? (customer.trim() || undefined) : undefined,
+                  service_tree_id: mode === 'live' ? (serviceTreeId.trim() || undefined) : undefined,
                 })
               }
+              disabled={mode === 'replay' && !xcv}
+              title={mode === 'replay' && !xcv ? 'Paste an xcv to replay' : undefined}
             >
               <i className="fas fa-play" /> Start Investigation
             </button>
@@ -524,7 +916,7 @@ export default function ChaLivePage() {
           <div className="cha-panel">
             <div className="cha-panel-header">
               <span>
-                <i className="fas fa-stream" />&nbsp;Live Activity Feed
+                <i className="fas fa-satellite-dish" />&nbsp;Details
                 {state.running && (
                   <i className="fas fa-circle-notch" style={{ marginLeft: 8, color: 'var(--cha-primary)', animation: 'cha-spin 1.2s linear infinite' }} />
                 )}
@@ -532,37 +924,56 @@ export default function ChaLivePage() {
               <span className="pill" style={{ background: 'var(--cha-primary)' }}>{state.events.length}</span>
             </div>
             <div className="cha-panel-body" style={{ paddingRight: 6 }}>
-              <ActivityFeed events={state.events} />
+              <ActivityFeed state={state} />
             </div>
           </div>
 
           {/* Summary */}
           {state.summary && (
             <div className="cha-resolution" style={{ marginTop: 0 }}>
-              <h3><i className="fas fa-flag-checkered" /> Investigation Summary</h3>
+              <button
+                type="button"
+                onClick={() => setSummaryOpen(v => !v)}
+                aria-expanded={summaryOpen}
+                style={{
+                  width: '100%', padding: 0, display: 'flex', alignItems: 'center', gap: 8,
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  textAlign: 'left', color: 'inherit', font: 'inherit',
+                }}
+              >
+                <h3 style={{ flex: 1, margin: 0 }}>
+                  <i className="fas fa-flag-checkered" /> Investigation Summary
+                </h3>
+                <i className={`fas fa-chevron-${summaryOpen ? 'up' : 'down'}`}
+                   style={{ fontSize: 12, color: 'var(--cha-text-muted)' }} />
+              </button>
 
-              <div className="rp-label">INVESTIGATION ID</div>
-              <div className="rp-value" style={{ fontFamily: 'ui-monospace, monospace' }}>{state.summary.investigation_id}</div>
-
-              {selected && (
+              {summaryOpen && (
                 <>
-                  <div className="rp-label">SELECTED HYPOTHESIS</div>
-                  <div className="rp-value">
-                    <strong>{selected.hypothesis_id}</strong> — {selected.statement}
-                    <br />
-                    Final confidence: <strong>{Math.round((selected.confidence || 0) * 100)}%</strong> · Status: <strong>{selected.status}</strong>
+                  <div className="rp-label">INVESTIGATION ID</div>
+                  <div className="rp-value" style={{ fontFamily: 'ui-monospace, monospace' }}>{state.summary.investigation_id}</div>
+
+                  {selected && (
+                    <>
+                      <div className="rp-label">SELECTED HYPOTHESIS</div>
+                      <div className="rp-value">
+                        <strong>{selected.hypothesis_id}</strong> — {selected.statement}
+                        <br />
+                        Final confidence: <strong>{Math.round((selected.confidence || 0) * 100)}%</strong> · Status: <strong>{selected.status}</strong>
+                      </div>
+                    </>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
+                    <Metric label="Symptoms" value={state.summary.symptoms_count} accent="#0984e3" />
+                    <Metric label="Hypotheses" value={state.summary.hypotheses_count} accent="#e17055" />
+                    <Metric label="Evidence" value={state.summary.evidence_count} accent="#00b894" />
+                    <Metric label="Actions" value={state.summary.actions_count} accent="#e84393" />
+                    <Metric label="Evidence Cycles" value={state.summary.evidence_cycles} accent="#6c5ce7" />
+                    <Metric label="Duration (s)" value={state.summary.duration_seconds.toFixed(1)} accent="#4f6bed" />
                   </div>
                 </>
               )}
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
-                <Metric label="Symptoms" value={state.summary.symptoms_count} accent="#0984e3" />
-                <Metric label="Hypotheses" value={state.summary.hypotheses_count} accent="#e17055" />
-                <Metric label="Evidence" value={state.summary.evidence_count} accent="#00b894" />
-                <Metric label="Actions" value={state.summary.actions_count} accent="#e84393" />
-                <Metric label="Evidence Cycles" value={state.summary.evidence_cycles} accent="#6c5ce7" />
-                <Metric label="Duration (s)" value={state.summary.duration_seconds.toFixed(1)} accent="#4f6bed" />
-              </div>
             </div>
           )}
         </div>

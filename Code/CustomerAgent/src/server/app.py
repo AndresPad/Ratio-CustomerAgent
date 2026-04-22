@@ -466,6 +466,17 @@ from server.ui_api import register_ui_routes  # noqa: E402
 
 register_ui_routes(app, run_pipeline)
 
+# ── Traces replay API (App Insights -> SSE) ──────────────────────────────────
+# Exposes GET /api/traces/{xcv}[/stream] so the UI can replay a past
+# investigation by correlation id. Fails gracefully if LOG_ANALYTICS_WORKSPACE_ID
+# is not set — the endpoints return 503 and the UI falls back to Mock mode.
+try:
+    from server.traces_api import register_traces_routes  # noqa: E402
+
+    register_traces_routes(app)
+except Exception as _traces_exc:  # pragma: no cover - optional dep
+    logger.warning("Traces replay API not registered: %s", _traces_exc)
+
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
