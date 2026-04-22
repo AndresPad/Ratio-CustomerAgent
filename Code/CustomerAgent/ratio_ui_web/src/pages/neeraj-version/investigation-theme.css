@@ -1,0 +1,857 @@
+/* ═══════════════════════════════════════════════════════════════
+   Investigation Reasoning Flow – Light Theme
+   ═══════════════════════════════════════════════════════════════ */
+
+.inv-root {
+  --inv-bg: #f8f9fb;
+  --inv-surface: #ffffff;
+  --inv-surface-raised: #f0f2f5;
+  --inv-border: #e2e5f1;
+  --inv-border-light: #eef0f4;
+  --inv-text: #1a1a2e;
+  --inv-text-muted: #5c6370;
+  --inv-text-dim: #8a8faa;
+  --inv-primary: #4f6bed;
+  --inv-primary-bg: rgba(79, 107, 237, 0.10);
+  --inv-success: #1a9a4a;
+  --inv-success-bg: rgba(26, 154, 74, 0.10);
+  --inv-warning: #b45700;
+  --inv-warning-bg: rgba(180, 87, 0, 0.10);
+  --inv-danger: #d1242f;
+  --inv-danger-bg: rgba(209, 36, 47, 0.10);
+  --inv-purple: #7c3aed;
+  --inv-purple-bg: rgba(124, 58, 237, 0.10);
+  --inv-cyan: #0891b2;
+  --inv-radius: 8px;
+  --inv-radius-lg: 12px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--inv-bg);
+  color: var(--inv-text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+/* ── Top bar with tabs ─────────────────────────────────────── */
+.inv-topbar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--inv-surface);
+  border-bottom: 1px solid var(--inv-border);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.inv-tab {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--inv-text-muted);
+  border: none;
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.inv-tab:hover {
+  color: var(--inv-text);
+  background: var(--inv-surface-raised);
+}
+
+.inv-tab.active {
+  background: var(--inv-primary);
+  color: #fff;
+  border-radius: 4px 4px 0 0;
+}
+
+/* ── Header section ────────────────────────────────────────── */
+.inv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px 12px;
+  background: var(--inv-surface);
+  border-bottom: 1px solid var(--inv-border);
+  flex-shrink: 0;
+}
+
+.inv-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inv-header-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--inv-primary), var(--inv-purple));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #fff;
+}
+
+.inv-header h1 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--inv-text);
+}
+
+.inv-header .subtitle {
+  font-size: 12px;
+  color: var(--inv-text-muted);
+  margin: 2px 0 0;
+  letter-spacing: 0.02em;
+}
+
+.inv-rerun-btn {
+  padding: 8px 20px;
+  border-radius: 6px;
+  border: none;
+  background: var(--inv-primary);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s;
+}
+
+.inv-rerun-btn:hover {
+  background: #3a7be0;
+}
+
+/* ── Pipeline stages ───────────────────────────────────────── */
+.inv-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 12px 24px;
+  background: var(--inv-surface);
+  border-bottom: 1px solid var(--inv-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.inv-stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--inv-text-dim);
+  background: transparent;
+  transition: all 0.2s ease;
+}
+
+.inv-stage-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* Reached (past) stages — icon takes stage color, text stays muted */
+.inv-stage.reached {
+  color: var(--inv-text-muted);
+}
+
+.inv-stage.reached.clr-primary  .inv-stage-icon { color: var(--inv-primary); }
+.inv-stage.reached.clr-warning  .inv-stage-icon { color: var(--inv-warning); }
+.inv-stage.reached.clr-cyan     .inv-stage-icon { color: var(--inv-cyan); }
+.inv-stage.reached.clr-purple   .inv-stage-icon { color: var(--inv-purple); }
+.inv-stage.reached.clr-success  .inv-stage-icon { color: var(--inv-success); }
+
+/* Active stage — colored pill background + matching text */
+.inv-stage.active.clr-primary {
+  background: var(--inv-primary-bg);
+  color: var(--inv-primary);
+}
+.inv-stage.active.clr-warning {
+  background: var(--inv-warning-bg);
+  color: var(--inv-warning);
+}
+.inv-stage.active.clr-cyan {
+  background: rgba(8, 145, 178, 0.10);
+  color: var(--inv-cyan);
+}
+.inv-stage.active.clr-purple {
+  background: var(--inv-purple-bg);
+  color: var(--inv-purple);
+}
+.inv-stage.active.clr-success {
+  background: var(--inv-success-bg);
+  color: var(--inv-success);
+}
+
+.inv-stage-arrow {
+  color: var(--inv-text-dim);
+  font-size: 10px;
+  margin: 0 2px;
+}
+
+/* ── Main content area ─────────────────────────────────────── */
+.inv-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.inv-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.inv-sidebar {
+  width: 420px;
+  min-width: 380px;
+  background: var(--inv-surface);
+  border-left: 1px solid var(--inv-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.04);
+}
+
+/* ── Signal card ───────────────────────────────────────────── */
+.inv-signal-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--inv-surface-raised);
+  border-radius: var(--inv-radius);
+  border: 1px solid var(--inv-border);
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.inv-signal-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--inv-primary-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--inv-primary);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.inv-signal-card .signal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--inv-text);
+}
+
+/* ── Symptom block ─────────────────────────────────────────── */
+.inv-symptom {
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-radius: var(--inv-radius);
+}
+
+.inv-symptom-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--inv-surface-raised);
+  border: 1px solid var(--inv-border);
+  border-radius: var(--inv-radius) var(--inv-radius) 0 0;
+}
+
+.inv-symptom-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.inv-symptom-icon.warning {
+  background: var(--inv-warning-bg);
+  color: var(--inv-warning);
+}
+
+.inv-symptom-header .symptom-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--inv-text);
+}
+
+/* ── Hypothesis row ────────────────────────────────────────── */
+.inv-hypothesis {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 10px 40px;
+  background: var(--inv-surface);
+  border-left: 1px solid var(--inv-border);
+  border-right: 1px solid var(--inv-border);
+}
+
+.inv-hyp-indicator {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.inv-hyp-indicator.high {
+  background: var(--inv-success-bg);
+  color: var(--inv-success);
+}
+
+.inv-hyp-indicator.low {
+  background: var(--inv-danger-bg);
+  color: var(--inv-danger);
+}
+
+.inv-hyp-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--inv-text);
+}
+
+.inv-hyp-bar-wrap {
+  width: 120px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inv-hyp-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--inv-border);
+  overflow: hidden;
+}
+
+.inv-hyp-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+
+.inv-hyp-bar-fill.high {
+  background: var(--inv-success);
+}
+
+.inv-hyp-bar-fill.low {
+  background: var(--inv-danger);
+}
+
+.inv-hyp-pct {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 32px;
+  text-align: right;
+}
+
+.inv-hyp-pct.high {
+  color: var(--inv-success);
+}
+
+.inv-hyp-pct.low {
+  color: var(--inv-danger);
+}
+
+/* ── Evidence items ────────────────────────────────────────── */
+.inv-evidence-list {
+  border-left: 1px solid var(--inv-border);
+  border-right: 1px solid var(--inv-border);
+  border-bottom: 1px solid var(--inv-border);
+  border-radius: 0 0 var(--inv-radius) var(--inv-radius);
+}
+
+.inv-evidence-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px 10px 56px;
+  border-top: 1px solid var(--inv-border-light);
+}
+
+.inv-evidence-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.inv-evidence-icon.success {
+  background: var(--inv-success-bg);
+  color: var(--inv-success);
+}
+
+.inv-evidence-icon.neutral {
+  background: var(--inv-purple-bg);
+  color: var(--inv-purple);
+}
+
+.inv-evidence-icon.failure {
+  background: var(--inv-danger-bg);
+  color: var(--inv-danger);
+}
+
+.inv-evidence-text .evidence-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--inv-text);
+}
+
+.inv-evidence-text .evidence-detail {
+  font-size: 11px;
+  color: var(--inv-text-muted);
+  margin-top: 1px;
+}
+
+/* ── Tree-view inline sections (scoring, reasoning, result) ── */
+.inv-tree-section {
+  margin-bottom: 16px;
+  border: 1px solid var(--inv-border);
+  border-radius: var(--inv-radius);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.inv-tree-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--inv-surface-raised);
+  border-bottom: 1px solid var(--inv-border);
+}
+
+.inv-tree-section-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.inv-tree-section-icon.scoring {
+  background: var(--inv-purple-bg);
+  color: var(--inv-purple);
+}
+
+.inv-tree-section-icon.reasoning {
+  background: var(--inv-primary-bg);
+  color: var(--inv-primary);
+}
+
+.inv-tree-section-icon.result {
+  background: var(--inv-success-bg);
+  color: var(--inv-success);
+}
+
+.inv-tree-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--inv-text);
+}
+
+.inv-tree-section-title.result {
+  color: var(--inv-success);
+}
+
+.inv-tree-section-body {
+  padding: 12px 16px;
+  background: var(--inv-surface);
+}
+
+/* Tree score rows (confidence in tree view) */
+.inv-tree-score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.inv-tree-score-label {
+  flex: 1;
+  font-size: 12px;
+  color: var(--inv-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inv-tree-score-bar {
+  width: 100px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--inv-border);
+  overflow: hidden;
+}
+
+.inv-tree-score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.8s ease;
+}
+
+.inv-tree-score-bar-fill.high {
+  background: var(--inv-success);
+}
+
+.inv-tree-score-bar-fill.low {
+  background: var(--inv-danger);
+}
+
+.inv-tree-score-pct {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 30px;
+  text-align: right;
+}
+
+.inv-tree-score-pct.high {
+  color: var(--inv-success);
+}
+
+.inv-tree-score-pct.low {
+  color: var(--inv-danger);
+}
+
+/* Tree reasoning body */
+.inv-tree-reasoning-body {
+  padding: 12px 16px;
+  background: var(--inv-surface);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--inv-text-muted);
+}
+
+.inv-tree-reason-line {
+  margin-bottom: 2px;
+}
+
+/* Tree result body */
+.inv-tree-result-desc {
+  font-size: 12px;
+  color: var(--inv-text-muted);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.inv-tree-result-action-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--inv-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* ── Sidebar – Reasoning Trace ─────────────────────────────── */
+.inv-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--inv-border);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--inv-text);
+}
+
+.inv-sidebar-header i {
+  color: var(--inv-primary);
+}
+
+.inv-trace {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 18px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--inv-text-muted);
+}
+
+.inv-trace .trace-bullet {
+  color: var(--inv-text-dim);
+  margin-right: 4px;
+}
+
+.inv-trace .trace-highlight {
+  color: var(--inv-primary);
+  font-weight: 600;
+}
+
+.inv-trace .trace-success {
+  color: var(--inv-success);
+}
+
+.inv-trace .trace-fail {
+  color: var(--inv-danger);
+}
+
+.inv-trace .trace-result {
+  color: var(--inv-warning);
+}
+
+.inv-trace .trace-indent {
+  padding-left: 16px;
+}
+
+.inv-trace .trace-line {
+  margin-bottom: 2px;
+}
+
+/* ── Confidence scores panel ───────────────────────────────── */
+.inv-confidence-panel {
+  padding: 16px 18px;
+  border-top: 1px solid var(--inv-border);
+}
+
+.inv-confidence-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--inv-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.inv-conf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.inv-conf-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.inv-conf-badge.hyp1 {
+  background: var(--inv-primary-bg);
+  color: var(--inv-primary);
+}
+
+.inv-conf-badge.hyp2 {
+  background: var(--inv-purple-bg);
+  color: var(--inv-purple);
+}
+
+.inv-conf-badge.hyp3 {
+  background: var(--inv-warning-bg);
+  color: var(--inv-warning);
+}
+
+.inv-conf-label {
+  flex: 1;
+  font-size: 12px;
+  color: var(--inv-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inv-conf-bar {
+  width: 80px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--inv-border);
+  overflow: hidden;
+}
+
+.inv-conf-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.inv-conf-bar-fill.high {
+  background: var(--inv-success);
+}
+
+.inv-conf-bar-fill.low {
+  background: var(--inv-danger);
+}
+
+.inv-conf-pct {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 30px;
+  text-align: right;
+}
+
+.inv-conf-pct.high {
+  color: var(--inv-success);
+}
+
+.inv-conf-pct.low {
+  color: var(--inv-danger);
+}
+
+/* ── Root cause panel ──────────────────────────────────────── */
+.inv-rootcause {
+  padding: 16px 18px;
+  border-top: 1px solid var(--inv-border);
+}
+
+.inv-rootcause-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.inv-rootcause-header i {
+  color: var(--inv-success);
+  font-size: 18px;
+}
+
+.inv-rootcause-header span {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--inv-success);
+}
+
+.inv-rootcause p {
+  font-size: 12px;
+  color: var(--inv-text-muted);
+  line-height: 1.6;
+  margin: 0 0 14px;
+}
+
+.inv-action-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--inv-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.inv-action-code {
+  background: var(--inv-surface-raised);
+  border: 1px solid var(--inv-border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--inv-success);
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+.inv-root ::-webkit-scrollbar {
+  width: 6px;
+}
+
+.inv-root ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.inv-root ::-webkit-scrollbar-thumb {
+  background: var(--inv-border);
+  border-radius: 3px;
+}
+
+.inv-root ::-webkit-scrollbar-thumb:hover {
+  background: var(--inv-text-dim);
+}
+
+/* ── Animations ────────────────────────────────────────────── */
+@keyframes inv-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes inv-trace-appear {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes inv-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes inv-typing-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: scale(0.8); }
+  30%           { opacity: 1;   transform: scale(1); }
+}
+
+.inv-animate-in {
+  animation: inv-fade-in 0.35s ease both;
+}
+
+.inv-trace-animate {
+  animation: inv-trace-appear 0.25s ease both;
+}
+
+.inv-spin {
+  display: inline-block;
+  animation: inv-spin 1s linear infinite;
+}
+
+.inv-symptom {
+  animation: inv-fade-in 0.3s ease both;
+}
+
+.inv-symptom:nth-child(2) { animation-delay: 0.1s; }
+.inv-symptom:nth-child(3) { animation-delay: 0.2s; }
+
+/* ── Typing indicator ──────────────────────────────────────── */
+.inv-typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+}
+
+.inv-typing-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--inv-primary);
+  animation: inv-typing-dot 1.2s infinite ease-in-out;
+}
+
+.inv-typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.inv-typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}

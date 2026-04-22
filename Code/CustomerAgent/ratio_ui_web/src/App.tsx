@@ -18,6 +18,8 @@ import ChaAgentsPage from './pages/customer-agent/ChaAgentsPage';
 import ChaConfigPage from './pages/customer-agent/ChaConfigPage';
 import ChaDataPage from './pages/customer-agent/ChaDataPage';
 import ChaKnowledgePage from './pages/customer-agent/ChaKnowledgePage';
+import ChaInvestigationFlowPage from './pages/customer-agent/ChaInvestigationFlowPage';
+import { InvestigationFlowPage } from './pages/neeraj-version/InvestigationFlowPage';
 
 class ErrorBoundaryInner extends Component<{ children: ReactNode; location: string }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -46,6 +48,18 @@ function ErrorBoundary({ children }: { children: ReactNode }) {
 function AppLayout() {
   const location = useLocation();
   const isCustomerAgent = location.pathname.startsWith('/customer-agent');
+  const isInvestigationFlow = location.pathname.startsWith('/investigation-flow');
+
+  // Investigation Reasoning Flow — standalone dark-themed page
+  if (isInvestigationFlow) {
+    return (
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/investigation-flow" element={<InvestigationFlowPage />} />
+        </Routes>
+      </ErrorBoundary>
+    );
+  }
 
   // Customer Agent has its own full-screen layout with dark sidebar
   if (isCustomerAgent) {
@@ -63,6 +77,7 @@ function AppLayout() {
             <Route path="config" element={<ChaConfigPage />} />
             <Route path="data" element={<ChaDataPage />} />
             <Route path="knowledge" element={<ChaKnowledgePage />} />
+            <Route path="investigation-flow" element={<ChaInvestigationFlowPage />} />
           </Route>
         </Routes>
       </ErrorBoundary>
