@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(_SRC_DIR, "..", ".env"))
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -50,6 +51,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MAF GroupChat Autonomous Agent", version="1.0.0")
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# The React dev server runs on http://127.0.0.1:3010 (Vite).
+# In development Vite proxies /customer-agent-api → this server, so requests
+# arrive same-origin; however when the UI is served from a different origin
+# (e.g. the Docker image at port 3000, or a production nginx) we need CORS.
+# Origins are explicit — never "*".
+_CORS_ORIGINS_ENV = os.getenv("CUSTOMER_AGENT_CORS_ORIGINS", "")
+_DEFAULT_ORIGINS = [
+    "http://127.0.0.1:3010",
+    "http://localhost:3010",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+_cors_origins = [o.strip() for o in _CORS_ORIGINS_ENV.split(",") if o.strip()] or _DEFAULT_ORIGINS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Lazy-initialized globals ─────────────────────────────────────────────────
 _workflow = None
@@ -432,6 +455,17 @@ async def run_pipeline(req: RunRequest):
     )
 
 #---- UI Specific ─────────────────────────────────────────────────
+#
+# The ratio_ui_web React app (Code/CustomerAgent/ratio_ui_web) expects a set
+# of read-only "browse" endpoints plus an /api/investigate SSE endpoint that
+# emits events in a normalized `InvestigationEvent` shape.  These endpoints
+# are thin read-only wrappers around the config/knowledge directories and a
+# translator on top of the existing /api/run pipeline.
+
+from server.ui_api import register_ui_routes  # noqa: E402
+
+register_ui_routes(app, run_pipeline)
+
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 

@@ -23,7 +23,9 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/fuse-api/, ''),
       },
       '/customer-agent-api': {
-        target: 'http://127.0.0.1:8020',
+        // Customer Agent FastAPI server (see Code/scripts/start_all.ps1).
+        // Port 8503 matches `python -m uvicorn server.app:app --port 8503`.
+        target: 'http://127.0.0.1:8503',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/customer-agent-api/, ''),
       },
