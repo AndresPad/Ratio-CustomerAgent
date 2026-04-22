@@ -6,10 +6,10 @@ import './cha-theme.css';
 const PAGE_TITLES: Record<string, string> = {
   '': 'Home',
   'scenarios': 'Simulation Scenarios',
-  'live': 'Live Agent Orchestration',
+  'live': 'Live Orchestration',
   'active': 'Active Investigation',
   'theatre': 'Investigation Theatre',
-  'investigation-flow': 'Investigation Reasoning Flow',
+  'investigation-flow': 'Neural Canvas',
   'history': 'History',
   'agents': 'Agent Registry',
   'config': 'Configuration',
@@ -17,21 +17,26 @@ const PAGE_TITLES: Record<string, string> = {
   'knowledge': 'Knowledge Base',
 };
 
-const NAV = [
+type NavItem =
+  | { section: string }
+  | { to: string; icon: string; label: string; badge?: string };
+
+const NAV: readonly NavItem[] = [
+  { section: 'INVESTIGATION VIEWS' },
+  { to: 'live',               icon: 'fa-satellite-dish', label: 'Live Orchestration',    badge: 'v1' },
+  { to: 'theatre',            icon: 'fa-theater-masks',  label: 'Investigation Theatre', badge: 'v2' },
+  { to: 'investigation-flow', icon: 'fa-project-diagram',label: 'Neural Canvas',         badge: 'v3' },
   { section: 'INVESTIGATIONS' },
-  { to: 'live', icon: 'fa-satellite-dish', label: 'Live Orchestration' },
-  { to: 'scenarios', icon: 'fa-flask', label: 'Simulation Scenarios' },
-  { to: 'active', icon: 'fa-play-circle', label: 'Active Investigation' },
-  { to: 'theatre', icon: 'fa-theater-masks', label: 'Investigation Theatre' },
-  { to: 'investigation-flow', icon: 'fa-project-diagram', label: 'Reasoning Flow' },
-  { to: 'history', icon: 'fa-history', label: 'History' },
+  { to: 'active',    icon: 'fa-play-circle', label: 'Active Investigation' },
+  { to: 'scenarios', icon: 'fa-flask',       label: 'Simulation Scenarios' },
+  { to: 'history',   icon: 'fa-history',     label: 'History' },
   { section: 'AGENT FRAMEWORK' },
-  { to: 'agents', icon: 'fa-robot', label: 'Agent Registry' },
-  { to: 'config', icon: 'fa-sliders-h', label: 'Configuration' },
+  { to: 'agents', icon: 'fa-robot',      label: 'Agent Registry' },
+  { to: 'config', icon: 'fa-sliders-h',  label: 'Configuration' },
   { section: 'DATA' },
-  { to: 'data', icon: 'fa-database', label: 'Data Files' },
-  { to: 'knowledge', icon: 'fa-book', label: 'Knowledge Base' },
-] as const;
+  { to: 'data',      icon: 'fa-database', label: 'Data Files' },
+  { to: 'knowledge', icon: 'fa-book',     label: 'Knowledge Base' },
+];
 
 export default function ChaLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -102,6 +107,23 @@ export default function ChaLayout() {
               >
                 <i className={`fas ${item.icon}`} />
                 <span>{item.label}</span>
+                {item.badge && (
+                  <span
+                    style={{
+                      marginLeft: 'auto',
+                      fontSize: 9,
+                      background: 'rgba(179,136,255,0.15)',
+                      color: '#b388ff',
+                      padding: '1px 6px',
+                      borderRadius: 8,
+                      fontWeight: 600,
+                      letterSpacing: '0.5px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </NavLink>
             );
           })}
