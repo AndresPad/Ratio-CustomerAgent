@@ -51,16 +51,26 @@ try:
 except Exception:  # pragma: no cover - dotenv is optional
     pass
 
-# KQL query — parameterized by xcv. Mirrors the query users run in the
-# Log Analytics portal. Rows are returned ordered ascending by TimeGenerated
-# so the client can replay them in the original order.
-_KQL_TEMPLATE = """
-AppTraces
-| where TimeGenerated >= ago({lookback_days}d)
-| where tostring(Properties["xcv"]) == "{xcv}"
-| order by TimeGenerated asc
-| project TimeGenerated, Message, SeverityLevel, Properties
-"""
+# KQL query — loaded from config/queries/trace_replay.kql so it can be tweaked
+# without touching Python. Placeholders ({lookback_days}, {xcv}) are substituted
+# via str.format() in _query_trace(). The .kql file is the single source of
+# truth; if it's missing the server fails loudly at import time.
+_QUERIES_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "queries")
+)
+_TRACE_REPLAY_KQL_PATH = os.path.join(_QUERIES_DIR, "trace_replay.kql")
+
+
+def _load_kql(path: str) -> str:
+    """Load a .kql file, stripping `//` comment lines so they don't get
+    sent to Log Analytics."""
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+    lines = [ln for ln in raw.splitlines() if not ln.lstrip().startswith("//")]
+    return "\n".join(lines).strip() + "\n"
+
+
+_KQL_TEMPLATE = _load_kql(_TRACE_REPLAY_KQL_PATH)
 
 
 def _flatten_row(row: Any) -> dict[str, Any]:
@@ -70,25 +80,26 @@ def _flatten_row(row: Any) -> dict[str, Any]:
     Backend AgentLogger currently emits `{EventName, xcv, Service, ...fields}`
     on the live SSE stream — every *custom property* is already a top-level
     key. AppTraces nests those under a `Properties` dict, so we flatten it
-    back out. Known well-known fields (`TimeGenerated`, `Message`) are
-    preserved alongside.
+    back out. The KQL in config/queries/trace_replay.kql also projects
+    renamed convenience columns (event_timestamp, message, event_name,
+    agent_name, …) which we surface alongside the flattened Properties.
     """
     # LogsQueryClient returns rows as either list-of-values or dict-like
-    # objects depending on version; handle both defensively.
+    # objects depending on version. _query_trace() always passes a dict
+    # (built from the column names), so this is the hot path; the list
+    # branch is defensive only.
     if isinstance(row, dict):
-        ts = row.get("TimeGenerated")
-        message = row.get("Message")
-        props = row.get("Properties")
-        severity = row.get("SeverityLevel")
+        rowd = row
     else:
-        # Sequence aligned with the projection in _KQL_TEMPLATE:
-        # TimeGenerated, Message, SeverityLevel, Properties
-        ts, message, severity, props = (
-            row[0] if len(row) > 0 else None,
-            row[1] if len(row) > 1 else None,
-            row[2] if len(row) > 2 else None,
-            row[3] if len(row) > 3 else None,
-        )
+        rowd = {f"col_{i}": v for i, v in enumerate(row)}
+
+    # Accept both the renamed projection (event_timestamp, message) and the
+    # raw projection (TimeGenerated, Message) so the flattener stays
+    # compatible if the KQL is edited.
+    ts = rowd.get("event_timestamp") or rowd.get("TimeGenerated")
+    message = rowd.get("message") or rowd.get("Message")
+    severity = rowd.get("SeverityLevel")
+    props = rowd.get("Properties")
 
     if isinstance(props, str):
         try:
@@ -106,6 +117,17 @@ def _flatten_row(row: Any) -> dict[str, Any]:
                 continue
             event[k] = v
 
+    # Surface any other renamed columns from the projection as top-level
+    # fields (event_name, agent_name, hypothesis_selected, …). These are
+    # typically duplicates of what's already in Properties, but having them
+    # at the top level makes UI reducers and log readers simpler.
+    _reserved = {"event_timestamp", "TimeGenerated", "message", "Message",
+                 "SeverityLevel", "Properties"}
+    for k, v in rowd.items():
+        if k in _reserved or k in event or v is None:
+            continue
+        event[k] = v
+
     # Preserve top-level metadata.
     if ts is not None:
         event["TimeGenerated"] = str(ts)
@@ -119,7 +141,21 @@ def _flatten_row(row: Any) -> dict[str, Any]:
     return event
 
 
-async def _query_trace(xcv: str) -> list[dict[str, Any]]:
+def _build_agent_filter(agent: str | None) -> str:
+    """Return a KQL line that filters by agent name, or an empty string.
+
+    The agent value is sanitized (alnum + '_' + '-') before being inlined
+    into the query so it cannot break out of the string literal.
+    """
+    if not agent:
+        return ""
+    safe_agent = "".join(ch for ch in agent if ch.isalnum() or ch in "-_")
+    if not safe_agent:
+        raise HTTPException(400, "Invalid agent filter.")
+    return f"| where tostring(Properties.Agent) == '{safe_agent}'"
+
+
+async def _query_trace(xcv: str, agent: str | None = None) -> list[dict[str, Any]]:
     """Run the KQL query against Log Analytics in a thread and return the
     flattened rows."""
     workspace_id = os.getenv("LOG_ANALYTICS_WORKSPACE_ID", "").strip()
@@ -147,7 +183,11 @@ async def _query_trace(xcv: str) -> list[dict[str, Any]]:
     if not safe_xcv:
         raise HTTPException(400, "Invalid xcv.")
 
-    query = _KQL_TEMPLATE.format(lookback_days=lookback_days, xcv=safe_xcv)
+    query = _KQL_TEMPLATE.format(
+        lookback_days=lookback_days,
+        xcv=safe_xcv,
+        agent_filter=_build_agent_filter(agent),
+    )
 
     def _run() -> list[dict[str, Any]]:
         # Exclude cloud credential sources that probe non-routable metadata
@@ -187,6 +227,9 @@ async def _query_trace(xcv: str) -> list[dict[str, Any]]:
                 # Build dict using column names for robust flattening.
                 rowd = dict(zip(cols, row))
                 out.append(_flatten_row(rowd))
+        # The KQL orders desc for portal-friendly reading; re-sort ascending
+        # here so the replay stream plays oldest → newest.
+        out.sort(key=lambda e: _parse_ts_ms(e.get("TimeGenerated")) or 0.0)
         return out
 
     return await asyncio.to_thread(_run)
@@ -272,10 +315,13 @@ async def traces_health() -> dict[str, Any]:
 
 
 @router.get("/{xcv}")
-async def get_trace(xcv: str) -> dict[str, Any]:
+async def get_trace(
+    xcv: str,
+    agent: str | None = Query(None, max_length=64, description="Optional agent name filter (e.g. 'narrator')."),
+) -> dict[str, Any]:
     """Return the normalized event list for a past investigation."""
-    events = await _query_trace(xcv)
-    return {"xcv": xcv, "count": len(events), "events": events}
+    events = await _query_trace(xcv, agent=agent)
+    return {"xcv": xcv, "agent": agent, "count": len(events), "events": events}
 
 
 @router.get("/{xcv}/stream")
@@ -283,10 +329,11 @@ async def stream_trace(
     xcv: str,
     speed: str = Query("instant", pattern="^(instant|real|compressed)$"),
     compress_seconds: float = Query(30.0, ge=1.0, le=600.0),
+    agent: str | None = Query(None, max_length=64, description="Optional agent name filter (e.g. 'narrator')."),
 ) -> StreamingResponse:
     """Stream a past investigation as SSE frames using the same shape the
     live pipeline emits, so Theatre/Live reducers consume them unchanged."""
-    events = await _query_trace(xcv)
+    events = await _query_trace(xcv, agent=agent)
     delays = _pacing_delays(events, speed, compress_seconds)
 
     async def generator():

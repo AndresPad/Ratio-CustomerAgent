@@ -21,6 +21,10 @@ export interface DataSourceToggleProps {
   disabled?: boolean;
   onModeChange: (mode: OrchestrationMode) => void;
   onXcvChange: (xcv: string) => void;
+  /** Optional replay agent-name filter (e.g. 'narrator'). Only rendered if
+   *  both the change handler and current value are provided by the parent. */
+  agentFilter?: string;
+  onAgentFilterChange?: (agent: string) => void;
 }
 
 const BUTTON_BASE: CSSProperties = {
@@ -37,13 +41,13 @@ const BUTTON_BASE: CSSProperties = {
 };
 
 const OPTIONS: { id: OrchestrationMode; label: string; icon: string; accent: string; title: string }[] = [
-  { id: 'mock',   label: 'Mock',   icon: 'fa-flask',          accent: '#7c3aed', title: 'Scripted demo fixture (no network)' },
-  { id: 'replay', label: 'Replay', icon: 'fa-backward',       accent: '#0984e3', title: 'Replay a past run from App Insights by xcv' },
-  { id: 'live',   label: 'Live',   icon: 'fa-satellite-dish', accent: '#28a745', title: 'Run the real agent pipeline now' },
+  { id: 'mock',   label: 'Mock',    icon: 'fa-flask',          accent: '#7c3aed', title: 'Scripted demo fixture (no network, deterministic)' },
+  { id: 'replay', label: 'Polling', icon: 'fa-tower-broadcast',  accent: '#0984e3', title: 'Poll App Insights via KQL for a past investigation by xcv' },
+  { id: 'live',   label: 'New Run', icon: 'fa-satellite-dish', accent: '#28a745', title: 'Kick off a brand-new agent pipeline now (POST /api/run; requires MCP + Azure OpenAI; first event can take 10–30s)' },
 ];
 
 export function DataSourceToggle(props: DataSourceToggleProps) {
-  const { mode, xcv, disabled, onModeChange, onXcvChange } = props;
+  const { mode, xcv, disabled, onModeChange, onXcvChange, agentFilter, onAgentFilterChange } = props;
   const [replayAvailable, setReplayAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -108,6 +112,38 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
           }}
         />
       )}
+      {mode === 'replay' && onAgentFilterChange && (
+        <>
+          <input
+            list="cha-agent-filter-suggestions"
+            type="text"
+            placeholder="agent (blank = all)"
+            value={agentFilter ?? ''}
+            onChange={(e) => onAgentFilterChange(e.target.value.trim())}
+            disabled={disabled || replayAvailable === false}
+            spellCheck={false}
+            title="Filter replay events by agent name. Leave blank to see everything."
+            style={{
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 11,
+              padding: '5px 8px',
+              minWidth: 160,
+              border: '1px solid var(--cha-border)',
+              borderRadius: 6,
+            }}
+          />
+          <datalist id="cha-agent-filter-suggestions">
+            <option value="narrator" />
+            <option value="orchestrator" />
+            <option value="investigation_orchestrator" />
+            <option value="triage_agent" />
+            <option value="reasoner" />
+            <option value="action_planner" />
+            <option value="evidence_planner" />
+            <option value="entity_extractor" />
+          </datalist>
+        </>
+      )}
       {mode === 'replay' && replayAvailable === false && (
         <span style={{ fontSize: 10, color: '#b26a00' }}>
           <i className="fas fa-triangle-exclamation" /> Workspace not configured
@@ -120,6 +156,7 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
 /** localStorage helpers so the selection persists across reloads. */
 const LS_MODE = 'cha.orchestration.mode';
 const LS_XCV = 'cha.orchestration.xcv';
+const LS_AGENT = 'cha.orchestration.agentFilter';
 
 export function loadStoredMode(def: OrchestrationMode = 'mock'): OrchestrationMode {
   try {
@@ -143,4 +180,16 @@ export function persistMode(mode: OrchestrationMode): void {
 
 export function persistXcv(xcv: string): void {
   try { localStorage.setItem(LS_XCV, xcv); } catch { /* noop */ }
+}
+
+export function loadStoredAgentFilter(): string {
+  try {
+    return localStorage.getItem(LS_AGENT) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function persistAgentFilter(agent: string): void {
+  try { localStorage.setItem(LS_AGENT, agent); } catch { /* noop */ }
 }

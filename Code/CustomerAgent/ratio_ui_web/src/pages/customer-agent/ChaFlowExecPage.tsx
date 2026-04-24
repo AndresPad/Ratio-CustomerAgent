@@ -1,10 +1,11 @@
 /**
- * ChaFlowExecPage -- Live Investigation Reasoning Flow.
+ * ChaFlowExecPage -- Live Investigation Reasoning Flow (Neural Canvas v1).
  *
- * Auto-plays the investigation animation. Users can click "LIVE (XCV)"
- * to navigate to the detail page for real trace data.
+ * Auto-plays the investigation animation. Users can switch the data
+ * source between Mock / Polling / New Run via the shared toggle to
+ * match the Neural Canvas v2 controls.
  */
-import { useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   WorkflowCanvas,
@@ -23,13 +24,70 @@ import {
   MOCK_SIGNAL,
   ACTIVITY_BAR as S,
 } from './ChaInvestigationFlowPage';
+import { useLiveInvestigation } from '../../hooks/useLiveInvestigation';
+import type { OrchestrationMode } from '../../api/orchestrationSource';
+import {
+  DataSourceToggle,
+  loadStoredMode,
+  loadStoredXcv,
+  loadStoredAgentFilter,
+  persistMode,
+  persistXcv,
+  persistAgentFilter,
+} from '../../components/DataSourceToggle';
+import {
+  PollingStopwatch,
+  loadStoredPacing,
+  persistPacing,
+} from '../../components/PollingStopwatch';
 
 export default function ChaFlowExecPage() {
   const navigate = useNavigate();
   const [view, setView] = useState<'pipeline' | 'graph'>('graph');
 
-  const { stage, reached, traceCount, running, elapsed, start } = useFlow();
+  // ─── Data source (mock | replay | live) ───────────────────────
+  const [mode, setMode] = useState<OrchestrationMode>(() => loadStoredMode());
+  const [xcv, setXcv] = useState<string>(() => loadStoredXcv());
+  const [agentFilter, setAgentFilter] = useState<string>(() => loadStoredAgentFilter());
+  const [pollPacingMs, setPollPacingMs] = useState<number>(() => loadStoredPacing(300));
+
+  useEffect(() => { persistMode(mode); }, [mode]);
+  useEffect(() => { persistXcv(xcv); }, [xcv]);
+  useEffect(() => { persistAgentFilter(agentFilter); }, [agentFilter]);
+  useEffect(() => { persistPacing(pollPacingMs); }, [pollPacingMs]);
+
+  // Mock animation (always drives the visuals).
+  const { stage, reached, traceCount, running: mockRunning, elapsed, start: startMock } = useFlow();
+
+  // Live / replay stream — only used to drive the stopwatch + event count.
+  const live = useLiveInvestigation();
+  const liveRunning = live.state.running;
+  const liveEventCount = live.state.events.length;
+
+  const running = mockRunning || liveRunning;
   const complete = reached.length === INVESTIGATION_STAGES.length && !running;
+
+  const startLabel = useMemo(() => {
+    if (running) return 'Running…';
+    if (mode === 'mock') return 'Mock';
+    if (mode === 'replay') return 'Polling';
+    return 'New Run';
+  }, [running, mode]);
+
+  const handleStart = useCallback(() => {
+    // Kick the mock animation so the canvas + panels animate regardless of mode.
+    startMock();
+    if (mode === 'replay') {
+      live.start({
+        mode: 'replay',
+        xcv: xcv || undefined,
+        agentFilter: agentFilter || undefined,
+        pollPacingMs,
+      });
+    } else if (mode === 'live') {
+      live.start({ mode: 'live' });
+    }
+  }, [mode, xcv, agentFilter, pollPacingMs, startMock, live]);
 
   return (
     <div style={{
@@ -81,6 +139,27 @@ export default function ChaFlowExecPage() {
         elapsed={elapsed}
       />
 
+      {/* Source toggle + polling stopwatch */}
+      <div style={{ padding: '8px 20px 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <DataSourceToggle
+          mode={mode}
+          xcv={xcv}
+          disabled={running}
+          onModeChange={setMode}
+          onXcvChange={setXcv}
+          agentFilter={agentFilter}
+          onAgentFilterChange={setAgentFilter}
+        />
+        {mode === 'replay' && (
+          <PollingStopwatch
+            running={liveRunning}
+            eventCount={liveEventCount}
+            pacingMs={pollPacingMs}
+            onPacingChange={setPollPacingMs}
+          />
+        )}
+      </div>
+
       {/* Control Bar */}
       <div style={S.controlBar as CSSProperties}>
         <span style={{ fontSize: 12, fontWeight: 600, color: '#00bfa5', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -109,8 +188,8 @@ export default function ChaFlowExecPage() {
 
         <span style={S.spacer as CSSProperties} />
 
-        <button style={S.actionBtnPrimary} onClick={start} disabled={running}>
-          <i className={`fas ${running ? 'fa-spinner fa-spin' : 'fa-redo'}`} /> Re-run
+        <button style={S.actionBtnPrimary} onClick={handleStart} disabled={running}>
+          <i className={`fas ${running ? 'fa-spinner fa-spin' : 'fa-play'}`} /> {startLabel}
         </button>
       </div>
 

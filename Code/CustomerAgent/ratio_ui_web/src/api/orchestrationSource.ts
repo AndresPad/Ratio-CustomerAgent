@@ -25,8 +25,17 @@ export interface OrchestrationOptions {
   xcv?: string;
   /** Replay pacing. Defaults to 'instant'. */
   replaySpeed?: 'instant' | 'compressed' | 'real';
+  /** Optional agent-name filter for replay (e.g. 'narrator'). Blank/undefined = all agents. */
+  agentFilter?: string;
   /** For `mock` mode — milliseconds between frames. Default 180. */
   mockIntervalMs?: number;
+  /**
+   * Client-side pacing for `replay` mode — milliseconds to wait between
+   * yielded frames, so past events trickle into the UI like a live stream
+   * instead of arriving all at once. Default 0 (no pacing); set to e.g. 250
+   * for a demo-friendly drip feed.
+   */
+  pollPacingMs?: number;
 }
 
 export interface RawFrame {
@@ -107,7 +116,10 @@ async function* streamReplay(
 ): AsyncGenerator<RawFrame> {
   if (!opts.xcv) throw new Error('Replay mode requires an xcv.');
   const speed = opts.replaySpeed || 'instant';
-  const url = `${API_PREFIX}/api/traces/${encodeURIComponent(opts.xcv)}/stream?speed=${speed}`;
+  const params = new URLSearchParams({ speed });
+  const agent = (opts.agentFilter || '').trim();
+  if (agent) params.set('agent', agent);
+  const url = `${API_PREFIX}/api/traces/${encodeURIComponent(opts.xcv)}/stream?${params.toString()}`;
   const res = await fetch(url, { signal });
   if (!res.ok || !res.body) {
     let detail = `${res.status} ${res.statusText}`;
@@ -117,7 +129,25 @@ async function* streamReplay(
     } catch { /* noop */ }
     throw new Error(`Replay failed: ${detail}`);
   }
-  yield* parseSSE(res.body.getReader());
+  const pacing = Math.max(0, opts.pollPacingMs ?? 0);
+  for await (const frame of parseSSE(res.body.getReader())) {
+    if (signal.aborted) return;
+    if (pacing > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, pacing);
+        const onAbort = () => {
+          clearTimeout(t);
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }).catch((err) => {
+        if ((err as Error).name === 'AbortError') return;
+        throw err;
+      });
+      if (signal.aborted) return;
+    }
+    yield frame;
+  }
 }
 
 /** Mock — scripted fixture with configurable pacing. */

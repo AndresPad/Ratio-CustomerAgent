@@ -600,6 +600,10 @@ export interface LiveStartOptions extends RunPipelineRequest {
   mode?: OrchestrationMode;
   /** Correlation id required when mode is 'replay'. */
   xcv?: string;
+  /** Optional replay agent-name filter (e.g. 'narrator'). */
+  agentFilter?: string;
+  /** Client-side pacing for replay mode (ms between frames). Default 0. */
+  pollPacingMs?: number;
 }
 
 export interface UseLiveInvestigation {
@@ -630,11 +634,11 @@ export function useLiveInvestigation(): UseLiveInvestigation {
     abortRef.current = ctrl;
     dispatch({ type: 'reset' });
 
-    const { mode = 'live', xcv, customer_name, service_tree_id } = opts;
+    const { mode = 'live', xcv, customer_name, service_tree_id, agentFilter, pollPacingMs } = opts;
 
     try {
       for await (const evt of streamOrchestration(
-        { mode, xcv, customer_name, service_tree_id },
+        { mode, xcv, customer_name, service_tree_id, agentFilter, pollPacingMs },
         ctrl.signal,
       )) {
         const raw = evt as RawLiveEvent;

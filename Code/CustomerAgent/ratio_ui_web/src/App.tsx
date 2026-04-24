@@ -20,6 +20,7 @@ import ChaDataPage from './pages/customer-agent/ChaDataPage';
 import ChaKnowledgePage from './pages/customer-agent/ChaKnowledgePage';
 import ChaFlowExecPage from './pages/customer-agent/ChaFlowExecPage';
 import ChaFlowDetailPage from './pages/customer-agent/ChaFlowDetailPage';
+import ChaNeuralCanvasV2Page from './pages/customer-agent/ChaNeuralCanvasV2Page';
 import { InvestigationFlowPage } from './pages/neeraj-version/InvestigationFlowPage';
 
 class ErrorBoundaryInner extends Component<{ children: ReactNode; location: string }, { error: Error | null }> {
@@ -79,6 +80,7 @@ function AppLayout() {
             <Route path="data" element={<ChaDataPage />} />
             <Route path="knowledge" element={<ChaKnowledgePage />} />
             <Route path="investigation-flow" element={<ChaFlowExecPage />} />
+            <Route path="investigation-flow-v2" element={<ChaNeuralCanvasV2Page />} />
             <Route path="investigation-flow/detail" element={<ChaFlowDetailPage />} />
             <Route path="investigation-flow/deep-dive" element={<InvestigationFlowPage />} />
             <Route path="investigation-flow/:xcv" element={<ChaFlowDetailPage />} />

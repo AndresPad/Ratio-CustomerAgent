@@ -1,0 +1,32 @@
+// Trace replay query — loaded by server/traces_api.py.
+//
+// Placeholders (substituted via str.format in _query_trace):
+//   {lookback_days}  int   — how far back to search (overrides `ago(24h)`)
+//   {xcv}            str   — correlation id (sanitized in Python; alnum + '-_' only)
+//   {agent_filter}   str   — additional KQL clause for filtering by agent.
+//                             Empty string when no filter is requested; otherwise
+//                             a line like: `| where tostring(Properties.Agent) == 'narrator'`.
+//
+// Two adaptations vs. the Data Explorer version of this query:
+//   1. The `cluster('…').database('…')` prefix is omitted — LogsQueryClient
+//      is already scoped to the workspace via LOG_ANALYTICS_WORKSPACE_ID.
+//      Including the prefix causes a SemanticError against that endpoint.
+//   2. `ago(24h)` is parameterized as `ago({lookback_days}d)` and the
+//      hard-coded xcv GUID becomes `{xcv}` so the endpoint works for any run.
+//
+// The projection intentionally renames columns (event_timestamp, message,
+// event_name, agent_name, …). _flatten_row() in traces_api.py understands
+// both the renamed and the legacy (TimeGenerated/Message/Properties) shapes.
+AppTraces
+| where TimeGenerated > ago({lookback_days}d)
+| where Properties.xcv == '{xcv}'
+{agent_filter}
+| extend error = Properties.Error
+| project event_timestamp = TimeGenerated, message = Message, event_name = Properties.EventName,
+    hypothesis_selected = Properties.HypothesisId, speaker_change = Properties.NextSpeaker,
+    from_phase = Properties.FromPhase, to_phase = Properties.ToPhase, llm_response_text = Properties.ResponseText,
+    tool_invoked = Properties.Tool, query_text = Properties.QueryText, agent_name = Properties.Agent,
+    compound_signal_rationale = Properties.Rationale, signal_type = Properties.ContributingTypes, signal_confidence = Properties.Confidence,
+    tool_or_agent_result = Properties.Result, error = Properties.Error, Properties
+| where Properties.EventName !in ('EndpointHit', 'MCPCollectionCall', 'ToolCallStart', 'OutputParsed')
+| order by event_timestamp desc

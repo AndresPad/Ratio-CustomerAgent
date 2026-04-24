@@ -32,9 +32,16 @@ import {
   DataSourceToggle,
   loadStoredMode,
   loadStoredXcv,
+  loadStoredAgentFilter,
   persistMode,
   persistXcv,
+  persistAgentFilter,
 } from '../../components/DataSourceToggle';
+import {
+  PollingStopwatch,
+  loadStoredPacing,
+  persistPacing,
+} from '../../components/PollingStopwatch';
 
 /* ─────────────────────────────────────────────────────────────── */
 /* Small presentational building blocks                            */
@@ -686,6 +693,8 @@ export default function ChaLivePage() {
   const [serviceTreeId, setServiceTreeId] = useState('');
   const [mode, setMode] = useState<OrchestrationMode>(() => loadStoredMode('mock'));
   const [xcv, setXcv] = useState<string>(() => loadStoredXcv());
+  const [agentFilter, setAgentFilter] = useState<string>(() => loadStoredAgentFilter());
+  const [pollPacingMs, setPollPacingMs] = useState<number>(() => loadStoredPacing(300));
   const [summaryOpen, setSummaryOpen] = useState<boolean>(() => {
     try { return localStorage.getItem('cha.live.summaryOpen') !== '0'; }
     catch { return true; }
@@ -693,10 +702,23 @@ export default function ChaLivePage() {
 
   useEffect(() => { persistMode(mode); }, [mode]);
   useEffect(() => { persistXcv(xcv); }, [xcv]);
+  useEffect(() => { persistAgentFilter(agentFilter); }, [agentFilter]);
+  useEffect(() => { persistPacing(pollPacingMs); }, [pollPacingMs]);
   useEffect(() => {
     try { localStorage.setItem('cha.live.summaryOpen', summaryOpen ? '1' : '0'); }
     catch { /* noop */ }
   }, [summaryOpen]);
+
+  // Track elapsed time while waiting for the first event, so "New Run" mode
+  // doesn't look silently stuck (cold-start pipeline can take 10–30s).
+  const [waitElapsedMs, setWaitElapsedMs] = useState(0);
+  const waitingForFirst = state.running && state.events.length === 0;
+  useEffect(() => {
+    if (!waitingForFirst) { setWaitElapsedMs(0); return; }
+    const started = Date.now();
+    const id = setInterval(() => setWaitElapsedMs(Date.now() - started), 250);
+    return () => clearInterval(id);
+  }, [waitingForFirst]);
 
   const selected = useMemo(
     () => state.hypotheses.find(h => h.hypothesis_id === state.selectedHypothesisId),
@@ -779,12 +801,15 @@ export default function ChaLivePage() {
                   xcv: xcv || undefined,
                   customer_name: mode === 'live' ? (customer.trim() || undefined) : undefined,
                   service_tree_id: mode === 'live' ? (serviceTreeId.trim() || undefined) : undefined,
+                  agentFilter: undefined,
+                  pollPacingMs: mode === 'replay' ? pollPacingMs : undefined,
                 })
               }
               disabled={mode === 'replay' && !xcv}
               title={mode === 'replay' && !xcv ? 'Paste an xcv to replay' : undefined}
             >
-              <i className="fas fa-play" /> Start Investigation
+              <i className="fas fa-play" />
+              {mode === 'live' ? ' New Run' : mode === 'replay' ? ' Polling' : ' Mock'}
             </button>
           ) : (
             <button className="btn-stop" onClick={stop}>
@@ -797,8 +822,56 @@ export default function ChaLivePage() {
         </div>
       </div>
 
+      {/* ═══ POLLING STOPWATCH ═══ */}
+      {mode === 'replay' && (
+        <div style={{ marginBottom: 10 }}>
+          <PollingStopwatch
+            running={state.running}
+            eventCount={state.events.length}
+            pacingMs={pollPacingMs}
+            onPacingChange={setPollPacingMs}
+          />
+        </div>
+      )}
+
       {/* ═══ PIPELINE BAR ═══ */}
       <PipelineBar stage={state.stage} stagesReached={state.stagesReached} stageProgress={state.stageProgress} />
+
+      {/* ═══ WAITING BANNER ═══ */}
+      {waitingForFirst && (
+        <div
+          style={{
+            background: '#f4f8ff',
+            border: '1px solid #b6ccff',
+            borderRadius: 8,
+            padding: '10px 14px',
+            color: '#1a2a6b',
+            fontSize: 12,
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <i className="fas fa-spinner fa-spin" />
+          <span>
+            {mode === 'live' ? (
+              <>
+                Starting new pipeline run — waiting for first event… ({(waitElapsedMs / 1000).toFixed(1)}s)
+                {waitElapsedMs > 15000 && (
+                  <span style={{ color: '#b26a00', marginLeft: 8 }}>
+                    <i className="fas fa-triangle-exclamation" /> Still nothing? Check the uvicorn terminal for errors (MCP :8000 / Azure OpenAI auth).
+                  </span>
+                )}
+              </>
+            ) : mode === 'replay' ? (
+              <>Fetching past-run events from App Insights… ({(waitElapsedMs / 1000).toFixed(1)}s)</>
+            ) : (
+              <>Loading demo fixture… ({(waitElapsedMs / 1000).toFixed(1)}s)</>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* ═══ ERROR BANNER ═══ */}
       {state.error && (
