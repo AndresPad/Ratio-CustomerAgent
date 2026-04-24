@@ -35,6 +35,8 @@ export interface TraceLine {
   text: string;
   type: 'normal' | 'highlight' | 'success' | 'fail' | 'result';
   indent?: boolean;
+  /** Emoji icon shown before the text */
+  icon?: string;
   /** Which stage this trace line belongs to — controls when it appears */
   stage: InvestigationStage;
 }

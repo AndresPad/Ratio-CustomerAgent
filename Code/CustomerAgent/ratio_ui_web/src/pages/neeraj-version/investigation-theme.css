@@ -1,37 +1,58 @@
 /* ═══════════════════════════════════════════════════════════════
-   Investigation Reasoning Flow – Light Theme
+   Investigation Reasoning Flow – Ratio Design System Theme
+   Aligned with cha-theme.css color palette & conventions
    ═══════════════════════════════════════════════════════════════ */
 
 .inv-root {
-  --inv-bg: #f8f9fb;
+  /* Ratio primary palette */
+  --inv-bg: #f5f6fa;
   --inv-surface: #ffffff;
-  --inv-surface-raised: #f0f2f5;
+  --inv-surface-raised: #f0f2f7;
   --inv-border: #e2e5f1;
   --inv-border-light: #eef0f4;
+
+  /* Text hierarchy */
   --inv-text: #1a1a2e;
-  --inv-text-muted: #5c6370;
-  --inv-text-dim: #8a8faa;
+  --inv-text-muted: #5a5a7a;
+  --inv-text-dim: #8a8aaa;
+
+  /* Accent colors — matching Ratio/CHA theme */
   --inv-primary: #4f6bed;
   --inv-primary-bg: rgba(79, 107, 237, 0.10);
-  --inv-success: #1a9a4a;
-  --inv-success-bg: rgba(26, 154, 74, 0.10);
-  --inv-warning: #b45700;
-  --inv-warning-bg: rgba(180, 87, 0, 0.10);
-  --inv-danger: #d1242f;
-  --inv-danger-bg: rgba(209, 36, 47, 0.10);
+  --inv-primary-hover: #3d5bd9;
+  --inv-success: #28a745;
+  --inv-success-bg: rgba(40, 167, 69, 0.10);
+  --inv-warning: #f0ad4e;
+  --inv-warning-bg: rgba(240, 173, 78, 0.10);
+  --inv-danger: #dc3545;
+  --inv-danger-bg: rgba(220, 53, 69, 0.10);
   --inv-purple: #7c3aed;
   --inv-purple-bg: rgba(124, 58, 237, 0.10);
-  --inv-cyan: #0891b2;
+  --inv-cyan: #17a2b8;
+  --inv-cyan-bg: rgba(23, 162, 184, 0.10);
+  --inv-teal: #00bfa5;
+  --inv-teal-bg: rgba(0, 191, 165, 0.10);
   --inv-radius: 8px;
   --inv-radius-lg: 12px;
+  --inv-shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --inv-shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --inv-font: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 
   display: flex;
   flex-direction: column;
   height: 100vh;
   background: var(--inv-bg);
   color: var(--inv-text);
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--inv-font);
   overflow: hidden;
+}
+
+/* When inside ChaLayout, fit inside the content area instead of full viewport */
+.cha-main .inv-root {
+  height: calc(100vh - 52px);
+  margin: 0 -24px -24px;
+  position: relative;
+  z-index: 11;
 }
 
 /* ── Top bar with tabs ─────────────────────────────────────── */
@@ -62,7 +83,7 @@
 }
 
 .inv-tab.active {
-  background: var(--inv-primary);
+  background: linear-gradient(135deg, var(--inv-primary), var(--inv-purple));
   color: #fff;
   border-radius: 4px 4px 0 0;
 }
@@ -88,12 +109,13 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--inv-primary), var(--inv-purple));
+  background: linear-gradient(135deg, var(--inv-teal), var(--inv-primary));
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 16px;
   color: #fff;
+  box-shadow: 0 2px 8px rgba(79, 107, 237, 0.3);
 }
 
 .inv-header h1 {
@@ -114,7 +136,7 @@
   padding: 8px 20px;
   border-radius: 6px;
   border: none;
-  background: var(--inv-primary);
+  background: linear-gradient(135deg, var(--inv-teal), #00897b);
   color: #fff;
   font-weight: 600;
   font-size: 13px;
@@ -122,11 +144,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.15s;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 191, 165, 0.25);
 }
 
 .inv-rerun-btn:hover {
-  background: #3a7be0;
+  background: linear-gradient(135deg, #00897b, #00695c);
+  box-shadow: 0 4px 12px rgba(0, 191, 165, 0.35);
 }
 
 /* ── Pipeline stages ───────────────────────────────────────── */
@@ -175,22 +199,27 @@
 .inv-stage.active.clr-primary {
   background: var(--inv-primary-bg);
   color: var(--inv-primary);
+  box-shadow: 0 0 0 2px rgba(79, 107, 237, 0.15);
 }
 .inv-stage.active.clr-warning {
   background: var(--inv-warning-bg);
   color: var(--inv-warning);
+  box-shadow: 0 0 0 2px rgba(240, 173, 78, 0.15);
 }
 .inv-stage.active.clr-cyan {
-  background: rgba(8, 145, 178, 0.10);
+  background: var(--inv-cyan-bg);
   color: var(--inv-cyan);
+  box-shadow: 0 0 0 2px rgba(23, 162, 184, 0.15);
 }
 .inv-stage.active.clr-purple {
   background: var(--inv-purple-bg);
   color: var(--inv-purple);
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
 }
 .inv-stage.active.clr-success {
   background: var(--inv-success-bg);
   color: var(--inv-success);
+  box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.15);
 }
 
 .inv-stage-arrow {
@@ -220,7 +249,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.04);
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.06);
 }
 
 /* ── Signal card ───────────────────────────────────────────── */
@@ -229,11 +258,12 @@
   align-items: center;
   gap: 12px;
   padding: 14px 18px;
-  background: var(--inv-surface-raised);
+  background: linear-gradient(135deg, var(--inv-surface), var(--inv-surface-raised));
   border-radius: var(--inv-radius);
   border: 1px solid var(--inv-border);
+  border-left: 4px solid var(--inv-primary);
   margin-bottom: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--inv-shadow-sm);
 }
 
 .inv-signal-icon {
@@ -258,8 +288,9 @@
 /* ── Symptom block ─────────────────────────────────────────── */
 .inv-symptom {
   margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--inv-shadow-sm);
   border-radius: var(--inv-radius);
+  border-left: 3px solid var(--inv-warning);
 }
 
 .inv-symptom-header {
@@ -438,7 +469,7 @@
   border: 1px solid var(--inv-border);
   border-radius: var(--inv-radius);
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--inv-shadow-sm);
 }
 
 .inv-tree-section-header {
@@ -621,7 +652,8 @@
 }
 
 .inv-trace .trace-result {
-  color: var(--inv-warning);
+  color: var(--inv-teal);
+  font-weight: 600;
 }
 
 .inv-trace .trace-indent {
@@ -736,14 +768,14 @@
 }
 
 .inv-rootcause-header i {
-  color: var(--inv-success);
+  color: var(--inv-teal);
   font-size: 18px;
 }
 
 .inv-rootcause-header span {
   font-size: 14px;
   font-weight: 700;
-  color: var(--inv-success);
+  color: var(--inv-teal);
 }
 
 .inv-rootcause p {
@@ -765,11 +797,12 @@
 .inv-action-code {
   background: var(--inv-surface-raised);
   border: 1px solid var(--inv-border);
+  border-left: 3px solid var(--inv-teal);
   border-radius: 6px;
   padding: 12px 14px;
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  color: var(--inv-success);
+  color: var(--inv-teal);
   line-height: 1.5;
   overflow-x: auto;
 }

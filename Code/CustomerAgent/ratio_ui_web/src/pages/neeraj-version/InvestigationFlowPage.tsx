@@ -257,7 +257,7 @@ function ReasoningTrace({
           key={i}
           className={`trace-line inv-trace-animate ${line.indent ? 'trace-indent' : ''}`}
         >
-          <span className="trace-bullet">•</span>{' '}
+          <span className="trace-bullet">{line.icon ?? '\u2022'}</span>{' '}
           <span className={traceClass(line.type)}>{line.text}</span>
         </div>
       ))}
@@ -479,7 +479,7 @@ export function InvestigationFlowPage() {
                     className={`inv-tree-reason-line inv-trace-animate ${line.indent ? 'trace-indent' : ''}`}
                     style={{ animationDelay: `${i * 120}ms` }}
                   >
-                    <span className="trace-bullet">•</span>{' '}
+                    <span className="trace-bullet">{line.icon ?? '\u2022'}</span>{' '}
                     <span className={traceClass(line.type)}>{line.text}</span>
                   </div>
                 ))}
@@ -508,8 +508,8 @@ export function InvestigationFlowPage() {
         {/* Right sidebar */}
         <div className="inv-sidebar">
           <div className="inv-sidebar-header">
-            <i className="bi bi-braces" />
-            Reasoning Trace
+            <i className="bi bi-chat-text" />
+            Agent Narrative
           </div>
           <ReasoningTrace lines={MOCK_TRACE} visibleCount={visibleTraceCount} />
           <ConfidencePanel scores={MOCK_CONFIDENCE} visible={reached('scoring')} />

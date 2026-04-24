@@ -10,6 +10,8 @@ const PAGE_TITLES: Record<string, string> = {
   'active': 'Active Investigation',
   'theatre': 'Investigation Theatre',
   'investigation-flow': 'Investigation Reasoning Flow',
+  'investigation-flow/detail': 'Investigation Detail (XCV)',
+  'investigation-flow/deep-dive': 'Investigation Deep Dive',
   'history': 'History',
   'agents': 'Agent Registry',
   'config': 'Configuration',

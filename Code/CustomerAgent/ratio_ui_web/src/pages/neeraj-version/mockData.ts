@@ -43,34 +43,41 @@ export const MOCK_SIGNAL: InvestigationSignal = {
 };
 
 export const MOCK_TRACE: TraceLine[] = [
-  // Signal stage
-  { text: 'Ingesting signal: API latency anomaly detected', type: 'normal', stage: 'signal' },
-  // Symptom stage
-  { text: 'Correlating 3 symptoms within the 5-minute window', type: 'normal', stage: 'symptom' },
-  // Hypothesis stage
-  { text: 'Generating hypotheses from symptom patterns...', type: 'highlight', stage: 'hypothesis' },
-  { text: 'H1: Slow query → pool exhaustion (prior: 0.40)', indent: true, type: 'normal', stage: 'hypothesis' },
-  { text: 'H2: Memory leak in search service (prior: 0.35)', indent: true, type: 'normal', stage: 'hypothesis' },
-  { text: 'H3: Upstream dependency failure (prior: 0.25)', indent: true, type: 'normal', stage: 'hypothesis' },
-  // Evidence collection stage
-  { text: 'Collecting evidence for H1...', type: 'highlight', stage: 'evidence' },
-  { text: '✓ Query plan shows sequential scan on 2.1M rows', indent: true, type: 'success', stage: 'evidence' },
-  { text: '✓ Connection wait time 360x above baseline', indent: true, type: 'success', stage: 'evidence' },
-  { text: '✓ Index dropped in deploy #4821 — matches timeline', indent: true, type: 'success', stage: 'evidence' },
-  { text: '→ H1 confidence updated: 0.40 → 0.92', indent: true, type: 'result', stage: 'evidence' },
-  { text: 'Collecting evidence for H2...', type: 'highlight', stage: 'evidence' },
-  { text: '✗ No significant heap object retention found', indent: true, type: 'fail', stage: 'evidence' },
-  { text: '✗ No OOM kills in 24h window', indent: true, type: 'fail', stage: 'evidence' },
-  { text: '→ H2 confidence updated: 0.35 → 0.15', indent: true, type: 'result', stage: 'evidence' },
-  { text: 'Collecting evidence for H3...', type: 'highlight', stage: 'evidence' },
-  { text: '✗ All upstream services reporting healthy', indent: true, type: 'fail', stage: 'evidence' },
-  { text: '✗ Inter-service network latency normal', indent: true, type: 'fail', stage: 'evidence' },
-  { text: '→ H3 confidence updated: 0.25 → 0.08', indent: true, type: 'result', stage: 'evidence' },
-  // Scoring stage
-  { text: 'Confidence scoring complete. Winner: H1 (0.92)', type: 'highlight', stage: 'scoring' },
-  // Reasoning stage
-  { text: 'Root cause: Missing index after migration #4821', type: 'result', stage: 'reasoning' },
-  { text: 'Recommended fix: CREATE INDEX CONCURRENTLY ...', type: 'success', stage: 'reasoning' },
+  // Signal
+  { stage: 'signal', text: 'Received IcM signal #784501920 (Sev2) for BlackRock, Inc -- ScaleSet Platform', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'signal', text: 'Extracting customer context: subscription=3a7e-..., region=westeurope', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'signal', text: 'Signal classified as ACTIVE outage -- escalating to symptom detection', type: 'highlight', icon: '\u{1f7e1}' },
+  // Symptom
+  { stage: 'symptom', text: 'Querying Kusto: SLI breaches for subscription in last 4h', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'symptom', text: 'Found 7 SLI breaches across Xstore, Allocator, CIS, Regional Network Mgr', type: 'success', icon: '\u{1f7e2}' },
+  { stage: 'symptom', text: 'Checking dependency health: Xstore degraded in westeurope (p99 latency 4200ms)', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'symptom', text: 'Correlating active incidents: 2 overlapping outages found in region', type: 'highlight', icon: '\u{1f7e1}' },
+  // Hypothesis
+  { stage: 'hypothesis', text: 'Generating hypothesis HYP-DEP-001: Xstore degradation cascading to customer VMs', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'hypothesis', text: 'Generating hypothesis HYP-OUT-002: Compounding effect from WACAP incident #784501920', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'hypothesis', text: 'Generating hypothesis HYP-SLI-001: Infrastructure degradation causing SLI breach on Delete VMSS', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'hypothesis', text: '4 hypotheses generated -- proceeding to evidence collection', type: 'success', icon: '\u{1f7e2}' },
+  // Evidence
+  { stage: 'evidence', text: 'Querying Kusto: Xstore availability metrics for westeurope (last 6h)', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'evidence', text: 'Retrieved 312 telemetry records -- Xstore success rate dropped to 94.2%', type: 'highlight', icon: '\u{1f7e3}' },
+  { stage: 'evidence', text: 'Fetching IcM timeline for incident #784501920: 3 updates, last at 14:32 UTC', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'evidence', text: 'Cross-referencing SLI breach windows with dependency outage timestamps', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'evidence', text: 'Collected 7 evidence items across 3 data sources', type: 'success', icon: '\u{1f7e2}' },
+  // Scoring
+  { stage: 'scoring', text: 'Scoring HYP-DEP-001: strong temporal correlation (r=0.91) with Xstore latency spike', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'scoring', text: 'Scoring HYP-OUT-002: moderate overlap -- WACAP incident covers 60% of breach window', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'scoring', text: 'Scoring HYP-SLI-001: weak direct evidence -- SLI breach may be secondary effect', type: 'normal', icon: '\u{1f7e1}' },
+  { stage: 'scoring', text: 'Confidence assigned: DEP-001=89%, OUT-002=69%, SLI-001=60%, OUT-001=54%', type: 'success', icon: '\u{1f7e2}' },
+  // Reasoning
+  { stage: 'reasoning', text: 'Evaluating causal chain: Xstore degradation -> resource exhaustion -> VMSS delete failures', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'reasoning', text: 'HYP-DEP-001 selected as primary root cause at 89% confidence', type: 'highlight', icon: '\u{1f7e3}' },
+  { stage: 'reasoning', text: 'Ruling out HYP-OUT-001: WACAP incident is correlated but not causal (54%)', type: 'normal', icon: '\u{1f7e1}' },
+  { stage: 'reasoning', text: 'Generating recommended actions: escalate Xstore team, apply regional failover', type: 'normal', icon: '\u{1f535}' },
+  { stage: 'reasoning', text: 'Building investigation summary with full evidence chain', type: 'normal', icon: '\u{1f7e3}' },
+  { stage: 'reasoning', text: 'Root cause determination complete -- writing final report', type: 'success', icon: '\u{1f7e2}' },
+  // Result
+  { stage: 'result', text: 'Investigation complete: 7 symptoms -> 4 hypotheses -> 7 evidence items -> 4 actions (346s)', type: 'result', icon: '\u2705' },
+  { stage: 'result', text: 'Root cause: Xstore degradation in westeurope (89% confidence)', type: 'result', icon: '\u2705' },
 ];
 
 export const MOCK_CONFIDENCE: ConfidenceScore[] = [
