@@ -25,13 +25,13 @@ $ErrorActionPreference = "SilentlyContinue"
 $ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $VENV = Join-Path $ROOT ".venv\Scripts\Activate.ps1"
 
-# ── Colors ──
-function Write-Header($msg) { Write-Host "`n━━━ $msg ━━━" -ForegroundColor Cyan }
-function Write-Ok($msg)     { Write-Host "  ✓ $msg" -ForegroundColor Green }
-function Write-Skip($msg)   { Write-Host "  ○ $msg (skipped)" -ForegroundColor DarkGray }
-function Write-Err($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red }
+# -- Colors --
+function Write-Header($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
+function Write-Ok($msg)     { Write-Host "  [+] $msg" -ForegroundColor Green }
+function Write-Skip($msg)   { Write-Host "  [o] $msg (skipped)" -ForegroundColor DarkGray }
+function Write-Err($msg)    { Write-Host "  [!] $msg" -ForegroundColor Red }
 
-# ── Stop existing services ──
+# -- Stop existing services --
 Write-Header "Stopping existing services"
 $ports = @(
     @{ Port=8000; Name="ratio-mcp" },
@@ -46,7 +46,7 @@ foreach ($svc in $ports) {
         }
         Write-Ok "Stopped $($svc.Name) (port $($svc.Port))"
     } else {
-        Write-Ok "$($svc.Name) — not running"
+        Write-Ok "$($svc.Name) - not running"
     }
 }
 
@@ -57,7 +57,7 @@ if ($StopOnly) {
 
 Start-Sleep -Seconds 1
 
-# ── Start services ──
+# -- Start services --
 Write-Header "Starting services"
 
 $jobs = @()
@@ -70,7 +70,7 @@ $jobs += Start-Job -Name "ratio-mcp" -ScriptBlock {
     $env:PYTHONPATH = (Join-Path $root "Code\RATIO_MCP\src")
     python server.py 2>&1
 } -ArgumentList $ROOT, $VENV
-Write-Ok "ratio-mcp → http://127.0.0.1:8000"
+Write-Ok "ratio-mcp -> http://127.0.0.1:8000"
 
 # 1. CustomerAgent server (port 8503)
 $jobs += Start-Job -Name "customer-agent" -ScriptBlock {
@@ -80,21 +80,21 @@ $jobs += Start-Job -Name "customer-agent" -ScriptBlock {
     $env:PYTHONPATH = (Join-Path $root "Code\CustomerAgent\src")
     python -m uvicorn server.app:app --host 127.0.0.1 --port 8503 2>&1
 } -ArgumentList $ROOT, $VENV
-Write-Ok "customer-agent → http://127.0.0.1:8503"
+Write-Ok "customer-agent -> http://127.0.0.1:8503"
 
-# 2. React UI — Vite dev server (port 3010)
+# 2. React UI - Vite dev server (port 3010)
 if (-not $SkipFrontend) {
     $jobs += Start-Job -Name "ratio-ui-web" -ScriptBlock {
         param($root)
         Set-Location (Join-Path $root "Code\CustomerAgent\ratio_ui_web")
         npm run dev 2>&1
     } -ArgumentList $ROOT
-    Write-Ok "ratio-ui-web → http://127.0.0.1:3010"
+    Write-Ok "ratio-ui-web -> http://127.0.0.1:3010"
 } else {
     Write-Skip "ratio-ui-web"
 }
 
-# ── Wait for health checks ──
+# -- Wait for health checks --
 Write-Header "Waiting for services to be ready"
 Start-Sleep -Seconds 6
 
@@ -108,21 +108,21 @@ foreach ($hc in $healthChecks) {
     for ($i = 0; $i -lt $maxRetries; $i++) {
         try {
             $r = Invoke-RestMethod -Uri $hc.Url -TimeoutSec 2 -ErrorAction Stop
-            Write-Ok "$($hc.Name) — healthy"
+            Write-Ok "$($hc.Name) - healthy"
             $ok = $true
             break
         } catch {
             Start-Sleep -Seconds 2
         }
     }
-    if (-not $ok) { Write-Err "$($hc.Name) — failed to start" }
+    if (-not $ok) { Write-Err "$($hc.Name) - failed to start" }
 }
 
-# ── Summary ──
+# -- Summary --
 Write-Header "Local Dev Stack"
 Write-Host ""
 Write-Host "  Service         URL" -ForegroundColor White
-Write-Host "  ──────────────  ──────────────────────────────" -ForegroundColor DarkGray
+Write-Host "  ---------------  ---------------------------------" -ForegroundColor DarkGray
 Write-Host "  ratio-mcp       http://127.0.0.1:8000" -ForegroundColor White
 Write-Host "  customer-agent  http://127.0.0.1:8503" -ForegroundColor White
 if (-not $SkipFrontend) {
@@ -132,7 +132,7 @@ Write-Host ""
 Write-Host "  Press Ctrl+C to stop all services" -ForegroundColor DarkGray
 Write-Host ""
 
-# ── Tail logs (keep script alive) ──
+# -- Tail logs (keep script alive) --
 try {
     while ($true) {
         foreach ($j in $jobs) {
@@ -150,7 +150,7 @@ try {
         Start-Sleep -Seconds 3
     }
 } finally {
-    Write-Header "Shutting down all services"
+    Write-Header "Shutting down services"
     $jobs | Stop-Job -ErrorAction SilentlyContinue
     $jobs | Remove-Job -Force -ErrorAction SilentlyContinue
     foreach ($svc in $ports) {

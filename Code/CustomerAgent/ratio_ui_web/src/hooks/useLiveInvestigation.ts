@@ -568,7 +568,9 @@ function reduceEvent(state: LiveState, evt: LiveEvent): LiveState {
       return advanceStage(next, 'summary', 100);
     }
 
-    case 'pipeline_complete': {
+    case 'pipeline_complete':
+    case 'RequestEnd':
+    case 'RequestEnded': {
       return {
         ...next,
         running: false,
@@ -604,6 +606,8 @@ export interface LiveStartOptions extends RunPipelineRequest {
   agentFilter?: string;
   /** Client-side pacing for replay mode (ms between frames). Default 0. */
   pollPacingMs?: number;
+  /** Re-poll interval in ms for replay mode until RequestEnd is seen. Default 5000. 0 disables. */
+  repollIntervalMs?: number;
 }
 
 export interface UseLiveInvestigation {
@@ -634,16 +638,59 @@ export function useLiveInvestigation(): UseLiveInvestigation {
     abortRef.current = ctrl;
     dispatch({ type: 'reset' });
 
-    const { mode = 'live', xcv, customer_name, service_tree_id, agentFilter, pollPacingMs } = opts;
+    const { mode = 'live', xcv, customer_name, service_tree_id, agentFilter, pollPacingMs, repollIntervalMs = 5000 } = opts;
 
     try {
-      for await (const evt of streamOrchestration(
-        { mode, xcv, customer_name, service_tree_id, agentFilter, pollPacingMs },
-        ctrl.signal,
-      )) {
-        const raw = evt as RawLiveEvent;
-        const normalized: LiveEvent = { ...raw, kind: kindOf(raw), receivedAt: Date.now() };
-        dispatch({ type: 'event', event: normalized });
+      if (mode === 'replay' && repollIntervalMs > 0) {
+        // ── Re-polling loop: keep fetching until RequestEnd is seen ──
+        const seenTimestamps = new Set<string>();
+        let foundRequestEnd = false;
+
+        while (!ctrl.signal.aborted && !foundRequestEnd) {
+          for await (const evt of streamOrchestration(
+            { mode, xcv, customer_name, service_tree_id, agentFilter, pollPacingMs: 0 },
+            ctrl.signal,
+          )) {
+            const raw = evt as RawLiveEvent;
+            const kind = kindOf(raw);
+
+            // Deduplicate by TimeGenerated + EventName to avoid replaying same events
+            const ts = String(raw.TimeGenerated ?? raw.event_timestamp ?? '');
+            const dedupeKey = `${ts}|${kind}`;
+            if (seenTimestamps.has(dedupeKey)) continue;
+            seenTimestamps.add(dedupeKey);
+
+            const normalized: LiveEvent = { ...raw, kind, receivedAt: Date.now() };
+            dispatch({ type: 'event', event: normalized });
+
+            // Check for RequestEnd / RequestEnded
+            if (kind === 'RequestEnd' || kind === 'RequestEnded' || kind === 'pipeline_complete' || kind === 'InvestigationComplete') {
+              foundRequestEnd = true;
+            }
+          }
+
+          if (foundRequestEnd || ctrl.signal.aborted) break;
+
+          // Wait before next poll
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(resolve, repollIntervalMs);
+            const onAbort = () => {
+              clearTimeout(t);
+              reject(new DOMException('Aborted', 'AbortError'));
+            };
+            ctrl.signal.addEventListener('abort', onAbort, { once: true });
+          });
+        }
+      } else {
+        // ── Single pass (live / mock / replay with repoll disabled) ──
+        for await (const evt of streamOrchestration(
+          { mode, xcv, customer_name, service_tree_id, agentFilter, pollPacingMs },
+          ctrl.signal,
+        )) {
+          const raw = evt as RawLiveEvent;
+          const normalized: LiveEvent = { ...raw, kind: kindOf(raw), receivedAt: Date.now() };
+          dispatch({ type: 'event', event: normalized });
+        }
       }
       dispatch({ type: 'finish' });
     } catch (err: unknown) {

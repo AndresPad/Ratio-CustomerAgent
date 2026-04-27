@@ -67,16 +67,20 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
         {OPTIONS.map((opt, i) => {
           const selected = mode === opt.id;
           const isReplay = opt.id === 'replay';
-          const disabledOpt = Boolean(disabled) || (isReplay && replayAvailable === false);
+          // Allow button to be clicked, but show warning in tooltip if not available
+          const buttonDisabled = Boolean(disabled);
           return (
             <button
               key={opt.id}
               role="radio"
               aria-checked={selected}
-              title={disabledOpt && isReplay
-                ? 'Replay unavailable — set LOG_ANALYTICS_WORKSPACE_ID and run `az login`.'
-                : opt.title}
-              disabled={disabledOpt}
+              title={
+                buttonDisabled ? 'Toggle disabled' 
+                : isReplay && replayAvailable === false
+                ? 'Replay may not be fully configured — set LOG_ANALYTICS_WORKSPACE_ID and run `az login`. Clicking will attempt connection.'
+                : opt.title
+              }
+              disabled={buttonDisabled}
               onClick={() => onModeChange(opt.id)}
               style={{
                 ...BUTTON_BASE,
@@ -84,8 +88,8 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
                 borderRadius: 0,
                 background: selected ? opt.accent : BUTTON_BASE.background,
                 color: selected ? '#fff' : BUTTON_BASE.color,
-                opacity: disabledOpt ? 0.45 : 1,
-                cursor: disabledOpt ? 'not-allowed' : 'pointer',
+                opacity: buttonDisabled ? 0.45 : 1,
+                cursor: buttonDisabled ? 'not-allowed' : 'pointer',
               }}
             >
               <i className={`fas ${opt.icon}`} style={{ marginRight: 6 }} />
@@ -100,7 +104,7 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
           placeholder="xcv (e.g. 8b27bf8e-457c-…)"
           value={xcv}
           onChange={(e) => onXcvChange(e.target.value.trim())}
-          disabled={disabled || replayAvailable === false}
+          disabled={disabled}
           spellCheck={false}
           style={{
             fontFamily: 'ui-monospace, monospace',
@@ -120,7 +124,7 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
             placeholder="agent (blank = all)"
             value={agentFilter ?? ''}
             onChange={(e) => onAgentFilterChange(e.target.value.trim())}
-            disabled={disabled || replayAvailable === false}
+            disabled={disabled}
             spellCheck={false}
             title="Filter replay events by agent name. Leave blank to see everything."
             style={{

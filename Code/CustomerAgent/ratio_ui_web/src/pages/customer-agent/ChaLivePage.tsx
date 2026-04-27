@@ -772,7 +772,6 @@ export default function ChaLivePage() {
           <DataSourceToggle
             mode={mode}
             xcv={xcv}
-            disabled={state.running}
             onModeChange={setMode}
             onXcvChange={setXcv}
           />
@@ -801,8 +800,11 @@ export default function ChaLivePage() {
                   xcv: xcv || undefined,
                   customer_name: mode === 'live' ? (customer.trim() || undefined) : undefined,
                   service_tree_id: mode === 'live' ? (serviceTreeId.trim() || undefined) : undefined,
+                  // Don't pass agentFilter to backend — the reducer needs ALL
+                  // event kinds to advance stages correctly.
                   agentFilter: undefined,
                   pollPacingMs: mode === 'replay' ? pollPacingMs : undefined,
+                  repollIntervalMs: mode === 'replay' ? 5000 : undefined,
                 })
               }
               disabled={mode === 'replay' && !xcv}

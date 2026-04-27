@@ -23,8 +23,12 @@ import {
   MOCK_TRACE,
   MOCK_SIGNAL,
   ACTIVITY_BAR as S,
+  type TraceLine,
+  type Hypothesis,
+  type RootCause,
+  type InvestigationStage,
 } from './ChaInvestigationFlowPage';
-import { useLiveInvestigation } from '../../hooks/useLiveInvestigation';
+import { useLiveInvestigation, type Stage, STAGES } from '../../hooks/useLiveInvestigation';
 import type { OrchestrationMode } from '../../api/orchestrationSource';
 import {
   DataSourceToggle,
@@ -59,13 +63,135 @@ export default function ChaFlowExecPage() {
   // Mock animation (always drives the visuals).
   const { stage, reached, traceCount, running: mockRunning, elapsed, start: startMock } = useFlow();
 
-  // Live / replay stream — only used to drive the stopwatch + event count.
+  // Live / replay stream — drives stopwatch + event count + panel data in non-mock modes.
   const live = useLiveInvestigation();
   const liveRunning = live.state.running;
   const liveEventCount = live.state.events.length;
 
   const running = mockRunning || liveRunning;
   const complete = reached.length === INVESTIGATION_STAGES.length && !running;
+
+  // ─── Map live events → TraceLine[] for the ReasoningPanel ─────
+  const STAGE_MAP: Record<Stage, InvestigationStage> = {
+    signal: 'signal',
+    evaluation: 'symptom',
+    hypothesis: 'hypothesis',
+    scoring: 'scoring',
+    selection: 'reasoning',
+    tool_execution: 'evidence',
+    summary: 'result',
+  };
+
+  const liveTraceLines = useMemo<TraceLine[]>(() => {
+    if (mode === 'mock') return MOCK_TRACE;
+    // Only show narrator agent's llm_response_text
+    return live.state.events
+      .filter((ev) => {
+        const props = (ev.Properties ?? {}) as Record<string, unknown>;
+        const agent = String(ev.AgentName ?? ev.Agent ?? props.AgentName ?? props.Agent ?? ev.agent_name ?? '').toLowerCase();
+        const llmText = String(ev.llm_response_text ?? ev.ResponseText ?? props.ResponseText ?? ev.text ?? '');
+        return agent.includes('narrator') && llmText.trim().length > 0;
+      })
+      .map((ev) => {
+        const props = (ev.Properties ?? {}) as Record<string, unknown>;
+        const pick = (k: string): string => String(ev[k] ?? props[k] ?? '');
+        const llmText = pick('llm_response_text') || pick('ResponseText') || pick('text');
+        const phase = pick('Phase') || pick('phase') || pick('to_phase') || '';
+
+        // Map phase to investigation stage
+        let mappedStage: InvestigationStage = 'reasoning';
+        const pl = phase.toLowerCase();
+        if (pl.includes('signal') || pl.includes('triage')) mappedStage = 'signal';
+        else if (pl.includes('symptom') || pl.includes('evaluat')) mappedStage = 'symptom';
+        else if (pl.includes('hypothes')) mappedStage = 'hypothesis';
+        else if (pl.includes('collect') || pl.includes('evidence') || pl.includes('acting')) mappedStage = 'evidence';
+        else if (pl.includes('scor') || pl.includes('confidence')) mappedStage = 'scoring';
+        else if (pl.includes('reason') || pl.includes('plan')) mappedStage = 'reasoning';
+        else if (pl.includes('complete') || pl.includes('summary') || pl.includes('notif')) mappedStage = 'result';
+
+        // Determine line type from content
+        const lower = llmText.toLowerCase();
+        let type: TraceLine['type'] = 'normal';
+        if (lower.includes('complete') || lower.includes('root cause') || lower.includes('conclusion')) type = 'result';
+        else if (lower.includes('error') || lower.includes('fail') || lower.includes('refuted')) type = 'fail';
+        else if (lower.includes('confirmed') || lower.includes('supported') || lower.includes('success')) type = 'success';
+        else if (lower.includes('hypothesis') || lower.includes('symptom') || lower.includes('evidence')) type = 'highlight';
+
+        // Icon based on stage
+        let icon = '\u{1f7e2}';
+        if (mappedStage === 'signal') icon = '\u{1f535}';
+        else if (mappedStage === 'symptom') icon = '\u{1f7e1}';
+        else if (mappedStage === 'hypothesis') icon = '\u{1f536}';
+        else if (mappedStage === 'evidence') icon = '\u{1f7e3}';
+        else if (mappedStage === 'scoring') icon = '\u{1f4ca}';
+        else if (mappedStage === 'result') icon = '\u2705';
+
+        const clip = llmText.length > 400 ? llmText.substring(0, 400) + '\u2026' : llmText;
+        return { stage: mappedStage, text: clip, type, icon };
+      });
+  }, [mode, live.state.events]);
+
+  const liveHypotheses = useMemo<Hypothesis[]>(() => {
+    if (mode === 'mock') return MOCK_HYPOTHESES;
+    return live.state.hypotheses.map((h) => {
+      let badgeColor = '#e67e22';
+      if (h.hypothesis_id.startsWith('HYP-DEP')) badgeColor = '#e74c3c';
+      else if (h.hypothesis_id.startsWith('HYP-SLI')) badgeColor = '#3498db';
+      return {
+        id: h.hypothesis_id,
+        description: h.statement || h.hypothesis_id,
+        score: Math.round(h.confidence * 100) || h.match_score || 50,
+        status: h.status === 'SUPPORTED' ? 'supported' as const : h.status === 'REFUTED' ? 'refuted' as const : 'uncertain' as const,
+        badgeColor,
+      };
+    });
+  }, [mode, live.state.hypotheses]);
+
+  const liveRootCause = useMemo<RootCause | null>(() => {
+    if (mode === 'mock') return MOCK_ROOT_CAUSE;
+    if (!live.state.summary) return null;
+    const s = live.state.summary;
+    const topHyp = live.state.hypotheses.find(h => h.selected);
+    return {
+      title: 'Root Cause Identified',
+      description: topHyp?.statement || 'Root cause determined.',
+      confidence: Math.round((topHyp?.confidence ?? 0) * 100),
+      summary: `Investigated ${s.symptoms_count} symptoms \u2192 ${s.hypotheses_count} hypotheses \u2192 ${s.evidence_count} evidence items \u2192 ${s.actions_count} actions (${s.duration_seconds}s)`,
+    };
+  }, [mode, live.state.summary, live.state.hypotheses]);
+
+  // Visible count: in mock mode use the animated count, in live mode show all events as they arrive
+  const effectiveTraceCount = mode === 'mock' ? traceCount : liveTraceLines.length;
+  const effectiveComplete = mode === 'mock' ? complete : live.state.done;
+  const effectiveSignalTitle = mode === 'mock' ? MOCK_SIGNAL.title : (live.state.customer_name || 'Investigation');
+
+  // ─── Map live stages to graph stages ──────────────────────────
+  const liveReached = useMemo<InvestigationStage[]>(() => {
+    if (mode === 'mock') return reached;
+    return live.state.stagesReached.map((s) => STAGE_MAP[s]).filter(Boolean);
+  }, [mode, reached, live.state.stagesReached]);
+
+  const liveActiveStage = useMemo<InvestigationStage | null>(() => {
+    if (mode === 'mock') return stage;
+    return STAGE_MAP[live.state.stage] ?? null;
+  }, [mode, stage, live.state.stage]);
+
+  const liveNodeCounts = useMemo(() => {
+    if (mode === 'mock') return MOCK_NODE_COUNTS;
+    const st = live.state;
+    const topScore = st.hypotheses.length > 0
+      ? Math.round(Math.max(...st.hypotheses.map(h => h.confidence)) * 100)
+      : 0;
+    return {
+      signal: st.signalTypes.length || st.events.filter(e => e.kind?.includes('Signal')).length || 0,
+      symptom: st.compounds.length || 0,
+      hypothesis: st.hypotheses.length || 0,
+      evidence: st.toolCalls.length || 0,
+      scoring: st.hypotheses.length || 0,
+      reasoning: st.agentTurns.length || 0,
+      result: st.done ? `${topScore}%` : '\u2014',
+    };
+  }, [mode, live.state]);
 
   const startLabel = useMemo(() => {
     if (running) return 'Running…';
@@ -81,8 +207,12 @@ export default function ChaFlowExecPage() {
       live.start({
         mode: 'replay',
         xcv: xcv || undefined,
-        agentFilter: agentFilter || undefined,
+        // Don't pass agentFilter to backend — the reducer needs ALL event
+        // kinds (SignalEvaluationStart, HypothesisScoring, etc.) to advance
+        // stages. Narrator-only filtering happens client-side in liveTraceLines.
+        agentFilter: undefined,
         pollPacingMs,
+        repollIntervalMs: 5000, // re-poll every 5s until RequestEnd
       });
     } else if (mode === 'live') {
       live.start({ mode: 'live' });
@@ -126,9 +256,9 @@ export default function ChaFlowExecPage() {
 
       {/* Pipeline or n8n Graph */}
       {view === 'pipeline' ? (
-        <WorkflowCanvas reached={reached} active={stage} counts={MOCK_NODE_COUNTS} />
+        <WorkflowCanvas reached={liveReached} active={liveActiveStage} counts={liveNodeCounts} />
       ) : (
-        <N8nWorkflowGraph reached={reached} active={stage} counts={MOCK_NODE_COUNTS} />
+        <N8nWorkflowGraph reached={liveReached} active={liveActiveStage} counts={liveNodeCounts} />
       )}
 
       {/* Status */}
@@ -144,7 +274,6 @@ export default function ChaFlowExecPage() {
         <DataSourceToggle
           mode={mode}
           xcv={xcv}
-          disabled={running}
           onModeChange={setMode}
           onXcvChange={setXcv}
           agentFilter={agentFilter}
@@ -194,20 +323,20 @@ export default function ChaFlowExecPage() {
       </div>
 
       {/* Signal title */}
-      <SignalHeader title={MOCK_SIGNAL.title} status={MOCK_SIGNAL.status} />
+      <SignalHeader title={effectiveSignalTitle} status={MOCK_SIGNAL.status} />
 
       {/* Two-column: Agent Reasoning + Hypothesis Verdict */}
       <div style={S.panelRow}>
         <ReasoningPanel
-          traceLines={MOCK_TRACE}
-          visibleCount={traceCount}
-          complete={complete}
+          traceLines={liveTraceLines}
+          visibleCount={effectiveTraceCount}
+          complete={effectiveComplete}
         />
-        <HypothesisPanel hypotheses={MOCK_HYPOTHESES} />
+        <HypothesisPanel hypotheses={liveHypotheses} />
       </div>
 
       {/* Root Cause + Confidence + Summary */}
-      <RootCauseSection rootCause={MOCK_ROOT_CAUSE} visible={complete} />
+      <RootCauseSection rootCause={liveRootCause ?? undefined} visible={effectiveComplete && liveRootCause != null} />
     </div>
   );
 }

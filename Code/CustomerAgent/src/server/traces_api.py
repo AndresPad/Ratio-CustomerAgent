@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import timedelta
 from typing import Any, Iterable
 
@@ -71,6 +72,35 @@ def _load_kql(path: str) -> str:
 
 
 _KQL_TEMPLATE = _load_kql(_TRACE_REPLAY_KQL_PATH)
+
+# ── Cached credential + LogsQueryClient singleton ──────────────────────
+# Creating a new DefaultAzureCredential per request causes an interactive
+# browser login every time the token expires.  Instead we lazily create a
+# single credential and LogsQueryClient, reuse them across requests, and
+# let the SDK's internal token cache handle refresh.
+_la_lock = threading.Lock()
+_la_cred: Any = None
+_la_client: Any = None
+
+
+def _get_logs_client() -> Any:
+    """Return a cached (credential, LogsQueryClient) pair, creating them
+    lazily on first call."""
+    global _la_cred, _la_client
+    if _la_client is not None:
+        return _la_client
+    with _la_lock:
+        if _la_client is not None:
+            return _la_client
+        from azure.identity import DefaultAzureCredential
+        from azure.monitor.query import LogsQueryClient
+        _la_cred = DefaultAzureCredential(
+            exclude_managed_identity_credential=True,
+            exclude_workload_identity_credential=True,
+            exclude_interactive_browser_credential=False,
+        )
+        _la_client = LogsQueryClient(_la_cred)
+        return _la_client
 
 
 def _flatten_row(row: Any) -> dict[str, Any]:
@@ -167,10 +197,9 @@ async def _query_trace(xcv: str, agent: str | None = None) -> list[dict[str, Any
         )
     lookback_days = int(os.getenv("LOG_ANALYTICS_LOOKBACK_DAYS", "7") or "7")
 
-    # Lazy import to avoid cost when replay isn't used.
+    # Lazy import check — surface a clear error if deps are missing.
     try:
-        from azure.monitor.query import LogsQueryClient, LogsQueryStatus
-        from azure.identity import DefaultAzureCredential
+        from azure.monitor.query import LogsQueryStatus  # noqa: F401
     except ImportError as exc:  # pragma: no cover - dep missing surfaced to user
         raise HTTPException(
             503,
@@ -190,29 +219,15 @@ async def _query_trace(xcv: str, agent: str | None = None) -> list[dict[str, Any
     )
 
     def _run() -> list[dict[str, Any]]:
-        # Exclude cloud credential sources that probe non-routable metadata
-        # endpoints on developer machines (IMDS hangs ~30s per attempt).
-        cred = DefaultAzureCredential(
-            exclude_managed_identity_credential=True,
-            exclude_workload_identity_credential=True,
-            exclude_interactive_browser_credential=False,
+        # Reuse the cached credential + client so the SDK's internal token
+        # cache handles refresh — no more interactive browser prompts on
+        # every poll.
+        client = _get_logs_client()
+        resp = client.query_workspace(
+            workspace_id=workspace_id,
+            query=query,
+            timespan=timedelta(days=lookback_days),
         )
-        client = LogsQueryClient(cred)
-        try:
-            resp = client.query_workspace(
-                workspace_id=workspace_id,
-                query=query,
-                timespan=timedelta(days=lookback_days),
-            )
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-            try:
-                cred.close()
-            except Exception:
-                pass
 
         if resp.status == LogsQueryStatus.FAILURE:
             # resp has .partial_error / .message depending on SDK version

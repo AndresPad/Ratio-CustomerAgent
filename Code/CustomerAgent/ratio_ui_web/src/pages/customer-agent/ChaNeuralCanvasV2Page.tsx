@@ -898,7 +898,7 @@ function InvestigationViews({ visible }: { visible: boolean }) {
     <div style={{ ...CARD, padding: 0, overflow: 'hidden', animation: 'cha-fade-in .35s ease both' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid #e2e5f1', background: '#f8f9fb' }}>
         {tabs.map(t => (
-          <button key={t.key} onClick={() => setView(t.key)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 18px', fontSize: 12, fontWeight: 600, border: 'none', borderBottom: view === t.key ? '2px solid #4f6bed' : '2px solid transparent', background: 'transparent', cursor: 'pointer', color: view === t.key ? '#4f6bed' : '#8a8faa', transition: 'all .15s' }}>
+          <button key={t.key} onClick={() => setView(t.key)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 18px', fontSize: 12, fontWeight: 600, border: 'none', borderBottom: view === t.key ? '2px solid #4f6bed' : '2px solid transparent', background: 'transparent', cursor: 'pointer', color: view === t.key ? '#4f6bed' : '#8a8faa', transition: 'all .15s' }} type="button">
             <i className={`fas ${t.icon}`} style={{ fontSize: 11 }} />{t.label}
           </button>
         ))}
@@ -1609,7 +1609,6 @@ export default function ChaNeuralCanvasV2Page() {
         <DataSourceToggle
           mode={mode}
           xcv={xcv}
-          disabled={running}
           onModeChange={setMode}
           onXcvChange={setXcv}
           agentFilter={agentFilter}

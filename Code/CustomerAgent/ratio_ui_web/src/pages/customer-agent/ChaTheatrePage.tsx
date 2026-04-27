@@ -1291,7 +1291,6 @@ export default function ChaTheatrePage() {
         <DataSourceToggle
           mode={mode}
           xcv={xcv}
-          disabled={running}
           onModeChange={setMode}
           onXcvChange={setXcv}
         />
