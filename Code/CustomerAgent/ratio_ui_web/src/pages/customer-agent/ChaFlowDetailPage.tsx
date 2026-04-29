@@ -472,12 +472,23 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
   const signalTitle = live.signalTitle || `${service.service_name} \u2014 Investigation`;
   const mapped = traceLines.length;
 
-  // The most recent narration line that's actually been revealed.
+  // The most recent narration line that's actually been revealed,
+  // condensed to one tight sentence so the per-service progress bar
+  // stays demo-friendly and readable at a glance.
   const visibleCount = live.traceCount;
   const latestNarration = useMemo(() => {
     for (let i = Math.min(visibleCount, traceLines.length) - 1; i >= 0; i--) {
+      const ln = traceLines[i];
+      const t = ln?.text;
+      if (!t || !t.trim()) continue;
+      // Prefer LLM narrator output; fall back to any non-empty line.
+      if (ln && (ln.isLlm || (ln.agent || '').toLowerCase() === 'narrator')) {
+        return summarizeNarratorText(t);
+      }
+    }
+    for (let i = Math.min(visibleCount, traceLines.length) - 1; i >= 0; i--) {
       const t = traceLines[i]?.text;
-      if (t && t.trim()) return t;
+      if (t && t.trim()) return summarizeNarratorText(t);
     }
     return '';
   }, [traceLines, visibleCount]);
@@ -670,17 +681,24 @@ interface ConversationHeroProps {
   visibleCount: number;
 }
 
-/** Agent display metadata: nice label, role description, color seed. */
-const AGENT_META: Record<string, { label: string; role: string; color: string }> = {
-  narrator: { label: 'Narrator', role: 'Tells the story', color: '#4d96ff' },
-  triage_agent: { label: 'Triage', role: 'Classifies signals', color: '#ff6b6b' },
-  reasoner: { label: 'Reasoner', role: 'Forms hypotheses', color: '#ffd93d' },
-  evidence_planner: { label: 'Evidence Planner', role: 'Plans data pulls', color: '#6bcb77' },
-  investigation_orchestrator: { label: 'Orchestrator', role: 'Coordinates the team', color: '#845ec2' },
-  incident_collector: { label: 'Incident Collector', role: 'Pulls IcM context', color: '#00bfa5' },
-  sli_collector: { label: 'SLI Collector', role: 'Pulls telemetry', color: '#26c6da' },
-  support_collector: { label: 'Support Collector', role: 'Pulls support tickets', color: '#ff9a76' },
+/** Agent display metadata: label, role description, color seed, icon. */
+const AGENT_META: Record<string, { label: string; role: string; color: string; icon: string }> = {
+  narrator:                   { label: 'Narrator',           role: 'Tells the story',         color: '#4d96ff', icon: 'fa-solid fa-bullhorn' },
+  triage_agent:               { label: 'Triage',             role: 'Classifies signals',      color: '#ff6b6b', icon: 'fa-solid fa-stethoscope' },
+  reasoner:                   { label: 'Reasoner',           role: 'Forms hypotheses',        color: '#ffd93d', icon: 'fa-solid fa-brain' },
+  evidence_planner:           { label: 'Evidence Planner',   role: 'Plans data pulls',        color: '#6bcb77', icon: 'fa-solid fa-clipboard-list' },
+  investigation_orchestrator: { label: 'Orchestrator',       role: 'Coordinates the team',    color: '#845ec2', icon: 'fa-solid fa-sitemap' },
+  incident_collector:         { label: 'Incident Collector', role: 'Pulls IcM context',       color: '#00bfa5', icon: 'fa-solid fa-circle-exclamation' },
+  sli_collector:              { label: 'SLI Collector',      role: 'Pulls telemetry',         color: '#26c6da', icon: 'fa-solid fa-chart-line' },
+  support_collector:          { label: 'Support Collector',  role: 'Pulls support tickets',   color: '#ff9a76', icon: 'fa-solid fa-headset' },
 };
+
+/** Pick a sensible icon for any agent (known or unknown). */
+function iconForAgent(name: string): string {
+  if (AGENT_META[name]) return AGENT_META[name].icon;
+  if (name.endsWith('_tool')) return 'fa-solid fa-wrench';
+  return 'fa-solid fa-robot';
+}
 
 /** Hash a string into one of a few stable demo colors, for unknown agents. */
 function colorForAgent(name: string): string {
@@ -710,6 +728,51 @@ function initialsFor(name: string): string {
   if (parts.length === 0) return '??';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+/** Try to infer which agent a narrator line is actually talking about,
+ *  so the chat bubble can be attributed to (e.g.) the Reasoner instead of
+ *  always to the Narrator. Falls back to 'narrator'. */
+function inferAgentFromText(text: string): string {
+  if (!text) return 'narrator';
+  const t = text.toLowerCase();
+  // Exact agent keys win first (e.g. "triage_agent").
+  for (const key of Object.keys(AGENT_META)) {
+    if (key === 'narrator') continue;
+    if (t.includes(key)) return key;
+  }
+  // Then try the human label (e.g. "reasoner", "evidence planner").
+  const labelToKey: [string, string][] = Object.entries(AGENT_META)
+    .filter(([k]) => k !== 'narrator')
+    .map(([k, m]) => [m.label.toLowerCase(), k] as [string, string]);
+  // Sort longer first so "evidence planner" matches before "planner".
+  labelToKey.sort((a, b) => b[0].length - a[0].length);
+  for (const [lbl, key] of labelToKey) {
+    if (t.includes(lbl)) return key;
+  }
+  // Common verbal cues.
+  if (/\bhypothes/i.test(text)) return 'reasoner';
+  if (/\btriag/i.test(text)) return 'triage_agent';
+  if (/\bevidence|\bplan\b/i.test(text)) return 'evidence_planner';
+  if (/\bincident|\bicm\b/i.test(text)) return 'incident_collector';
+  if (/\bsli\b|telemetr|metric/i.test(text)) return 'sli_collector';
+  if (/\bsupport|ticket/i.test(text)) return 'support_collector';
+  if (/\borchestrat|coordinat/i.test(text)) return 'investigation_orchestrator';
+  return 'narrator';
+}
+
+/** Condense long narrator text into a single tight summary sentence. */
+function summarizeNarratorText(text: string): string {
+  if (!text) return '';
+  const cleaned = text
+    .replace(/\r/g, '')
+    .replace(/^\s*\*+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Prefer the first sentence (up to ~200 chars).
+  const m = cleaned.match(/^(.*?[.!?])\s/);
+  const first = m ? m[1] : cleaned;
+  return first.length > 220 ? first.slice(0, 220).trimEnd() + '\u2026' : first;
 }
 
 function ConversationHero({
@@ -746,28 +809,42 @@ function ConversationHero({
       order.push(a);
     }
     // Fallback to a representative cast so the ring isn't empty before
-    // any LLM events have been revealed.
+    // any LLM events have been revealed. Narrator is intentionally
+    // excluded from the ring — they describe the action, they aren't
+    // a participant in it.
     if (order.length < 3) {
-      const fallback = ['narrator', 'triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator'];
+      const fallback = ['triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator', 'incident_collector', 'sli_collector'];
       for (const f of fallback) {
         if (!seen.has(f)) order.push(f);
       }
     }
-    return order;
+    return order.filter((a) => a !== 'narrator');
   }, [traceLines]);
 
   const speakingAgents = useMemo(() => {
     const set = new Set<string>();
-    for (const ln of visible) if (ln.agent) set.add(ln.agent);
+    for (const ln of visible) if (ln.agent && ln.agent !== 'narrator') set.add(ln.agent);
     return set;
   }, [visible]);
 
-  // The agent who spoke the most recent visible line — they're "talking".
-  const currentSpeaker = useMemo(() => {
+  // The most recent two non-narrator speakers — used to draw a single
+  // ephemeral line from the previous speaker to the current one.
+  const { currentSpeaker, previousSpeaker } = useMemo(() => {
+    let curr: string | null = null;
+    let prev: string | null = null;
     for (let i = visible.length - 1; i >= 0; i--) {
-      if (visible[i].agent) return visible[i].agent ?? null;
+      const a = visible[i].agent;
+      if (!a || a === 'narrator') continue;
+      if (curr === null) {
+        curr = a;
+        continue;
+      }
+      if (a !== curr) {
+        prev = a;
+        break;
+      }
     }
-    return null;
+    return { currentSpeaker: curr, previousSpeaker: prev };
   }, [visible]);
 
   const reachedSet = useMemo(() => new Set(reached), [reached]);
@@ -820,8 +897,8 @@ function ConversationHero({
           }}
         />
         <span style={{ fontWeight: 700, color: '#cfd8e3' }}>
-          <i className="fas fa-comments" style={{ marginRight: 6 }} />
-          Agent Group Chat
+          <i className="fa-solid fa-wave-square" style={{ marginRight: 6 }} />
+          Investigation Reasoning
         </span>
         <span style={{ color: '#5d6f87' }}>{'\u00b7'}</span>
         <span style={{ color: '#9fb1c7' }}>{serviceName}</span>
@@ -947,6 +1024,7 @@ function ConversationHero({
           cast={cast}
           speakingAgents={speakingAgents}
           currentSpeaker={currentSpeaker}
+          previousSpeaker={previousSpeaker}
           activeColor={activeColor}
           stage={active}
           reachedSet={reachedSet}
@@ -974,16 +1052,22 @@ interface ChatTurn {
  *  - runs of non-LLM structural events from the same agent become a
  *    single "thinking" sub-line so the conversation stays readable */
 function buildChatTurns(lines: TraceLine[]): ChatTurn[] {
-  // Only surface narrator LLM responses (llm_response_text) in the chat.
+  // Only surface narrator LLM responses, but re-attribute each line to
+  // the agent it's actually about (e.g. "the Reasoner is forming a
+  // hypothesis…") and condense the prose to a tight one-liner so the
+  // demo audience can read it at a glance.
   const out: ChatTurn[] = [];
   for (const ln of lines) {
     const agent = (ln.agent || '').toLowerCase();
     if (agent !== 'narrator') continue;
     if (!ln.isLlm) continue;
     if (!ln.text || !ln.text.trim()) continue;
+    const summary = summarizeNarratorText(ln.text);
+    if (!summary) continue;
+    const speaker = inferAgentFromText(ln.text);
     out.push({
-      agent: 'narrator',
-      text: ln.text,
+      agent: speaker,
+      text: summary,
       isLlm: true,
       stage: ln.stage,
       tools: [],
@@ -1015,22 +1099,20 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
       <div
         style={{
           flexShrink: 0,
-          width: 34,
-          height: 34,
+          width: 36,
+          height: 36,
           borderRadius: '50%',
           background: `linear-gradient(135deg, ${color}, ${color}99)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: '#0a121f',
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: 0.3,
+          fontSize: 14,
           boxShadow: `0 0 0 2px #0a121f, 0 0 12px ${color}66`,
         }}
         title={`${labelForAgent(turn.agent)} \u2014 ${roleForAgent(turn.agent)}`}
       >
-        {initialsFor(turn.agent)}
+        <i className={iconForAgent(turn.agent)} />
       </div>
 
       {/* Bubble body */}
@@ -1128,20 +1210,19 @@ function ChatTyping({ agent }: { agent: string }) {
       <div
         style={{
           flexShrink: 0,
-          width: 34,
-          height: 34,
+          width: 36,
+          height: 36,
           borderRadius: '50%',
           background: `linear-gradient(135deg, ${color}, ${color}99)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: '#0a121f',
-          fontSize: 11,
-          fontWeight: 800,
+          fontSize: 14,
           boxShadow: `0 0 0 2px #0a121f, 0 0 12px ${color}66`,
         }}
       >
-        {initialsFor(agent)}
+        <i className={iconForAgent(agent)} />
       </div>
       <div
         style={{
@@ -1181,6 +1262,7 @@ interface AgentRingProps {
   cast: string[];
   speakingAgents: Set<string>;
   currentSpeaker: string | null;
+  previousSpeaker: string | null;
   activeColor: string;
   stage: InvestigationStage;
   reachedSet: Set<InvestigationStage>;
@@ -1192,6 +1274,7 @@ function AgentRing({
   cast,
   speakingAgents,
   currentSpeaker,
+  previousSpeaker,
   activeColor,
   stage,
   reachedSet,
@@ -1267,26 +1350,49 @@ function AgentRing({
             strokeDasharray="2 5"
             strokeWidth={1}
           />
-          {/* Cross-talk edges between every pair of agents who have spoken */}
-          {positions.map((a, i) =>
-            positions.slice(i + 1).map((b) => {
-              const aSpoke = speakingAgents.has(a.agent);
-              const bSpoke = speakingAgents.has(b.agent);
-              const both = aSpoke && bSpoke;
-              return (
+          {/* Single ephemeral line: previous speaker → current speaker.
+              No permanent cross-talk web; the line moves with the
+              conversation so the audience always sees "who handed off
+              to whom" in this very moment. */}
+          {(() => {
+            if (!currentSpeaker || !previousSpeaker) return null;
+            const a = positions.find((p) => p.agent === previousSpeaker);
+            const b = positions.find((p) => p.agent === currentSpeaker);
+            if (!a || !b) return null;
+            const mx = (a.x + b.x) / 2;
+            const my = (a.y + b.y) / 2;
+            // Arrow tip at the current speaker.
+            return (
+              <g key={`${previousSpeaker}->${currentSpeaker}`}>
                 <line
-                  key={`${a.agent}-${b.agent}`}
                   x1={a.x}
                   y1={a.y}
                   x2={b.x}
                   y2={b.y}
-                  stroke={both ? activeColor : '#1d2c45'}
-                  strokeOpacity={both ? 0.45 : 0.35}
-                  strokeWidth={both ? 1.2 : 0.7}
-                />
-              );
-            }),
-          )}
+                  stroke={activeColor}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  opacity={0.85}
+                  style={{ filter: `drop-shadow(0 0 6px ${activeColor})` }}
+                >
+                  <animate
+                    attributeName="stroke-dasharray"
+                    values="0,200;120,200"
+                    dur="0.6s"
+                    fill="freeze"
+                  />
+                </line>
+                <circle cx={mx} cy={my} r={3} fill={activeColor} opacity={0.9}>
+                  <animate
+                    attributeName="r"
+                    values="2;5;2"
+                    dur="1.2s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              </g>
+            );
+          })()}
           {/* Glowing core */}
           <circle cx={cx} cy={cy} r={r * 0.55} fill="url(#cha-ring-core)" />
           <circle
@@ -1324,6 +1430,9 @@ function AgentRing({
           const color = colorForAgent(p.agent);
           const left = `${(p.x / SIZE) * 100}%`;
           const top = `${(p.y / SIZE) * 100}%`;
+          // Active speaker is amplified — bigger node, brighter glow,
+          // bolder label — so the audience instantly sees who's talking.
+          const nodeSize = isCurrent ? 50 : 36;
           return (
             <div
               key={p.agent}
@@ -1338,45 +1447,47 @@ function AgentRing({
                 alignItems: 'center',
                 gap: 4,
                 pointerEvents: 'none',
+                zIndex: isCurrent ? 2 : 1,
               }}
             >
               <div
                 style={{
-                  width: 36,
-                  height: 36,
+                  width: nodeSize,
+                  height: nodeSize,
                   borderRadius: '50%',
-                  background: speaking
-                    ? `linear-gradient(135deg, ${color}, ${color}99)`
-                    : '#0f1c30',
+                  background: isCurrent
+                    ? `radial-gradient(circle at 30% 30%, ${color}, ${color}cc)`
+                    : speaking
+                      ? `linear-gradient(135deg, ${color}, ${color}99)`
+                      : '#0f1c30',
                   border: isCurrent
-                    ? `2px solid ${color}`
+                    ? `2.5px solid ${color}`
                     : speaking
                       ? `1.5px solid ${color}aa`
                       : '1px solid #2a3c5a',
-                  color: speaking ? '#0a121f' : '#6e8197',
+                  color: speaking || isCurrent ? '#0a121f' : '#6e8197',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: 11,
-                  fontWeight: 800,
+                  fontSize: isCurrent ? 18 : 14,
                   boxShadow: isCurrent
-                    ? `0 0 18px ${color}, 0 0 0 2px #0a121f`
+                    ? `0 0 26px ${color}, 0 0 0 3px #0a121f, 0 0 0 5px ${color}55`
                     : speaking
                       ? `0 0 8px ${color}55, 0 0 0 2px #0a121f`
                       : '0 0 0 2px #0a121f',
                   animation: isCurrent ? 'cha-pulse 1.4s ease-in-out infinite' : 'none',
-                  transition: 'border .2s ease, background .2s ease',
+                  transition: 'width .25s ease, height .25s ease, border .2s ease, background .2s ease, box-shadow .25s ease',
                 }}
               >
-                {initialsFor(p.agent)}
+                <i className={iconForAgent(p.agent)} />
               </div>
               <div
                 style={{
-                  fontSize: 9.5,
-                  color: speaking ? '#cfd8e3' : '#6e8197',
+                  fontSize: isCurrent ? 11 : 9.5,
+                  color: isCurrent ? '#ffffff' : speaking ? '#cfd8e3' : '#6e8197',
                   whiteSpace: 'nowrap',
                   textShadow: '0 1px 2px rgba(0,0,0,.7)',
-                  fontWeight: 600,
+                  fontWeight: isCurrent ? 700 : 600,
                 }}
               >
                 {labelForAgent(p.agent)}
