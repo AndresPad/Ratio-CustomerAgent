@@ -329,6 +329,114 @@ async def traces_health() -> dict[str, Any]:
     }
 
 
+@router.get("/services")
+async def list_services_with_traces(
+    customer_name: str = Query(..., min_length=1, max_length=256),
+    lookback_hours: int = Query(48, ge=1, le=720),
+    min_events: int = Query(1, ge=1, le=10_000),
+) -> list[dict[str, Any]]:
+    """Return services for a customer that have **real** trace data in the
+    configured Log Analytics workspace, with the latest XCV per service.
+
+    Unlike the cloud `/api/run/services` (which surfaces freshly-spawned
+    XCVs that may not yet be ingested), this endpoint scans `AppTraces`
+    directly so the UI only ever shows services it can actually replay.
+    """
+    workspace_id = os.getenv("LOG_ANALYTICS_WORKSPACE_ID", "").strip()
+    if not workspace_id:
+        raise HTTPException(503, "LOG_ANALYTICS_WORKSPACE_ID is not configured.")
+
+    try:
+        from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+        from azure.identity import DefaultAzureCredential
+    except ImportError as exc:  # pragma: no cover
+        raise HTTPException(503, f"azure-monitor-query is not installed: {exc}")
+
+    safe_customer = customer_name.replace("'", "''")
+    # `CustomerName` and `ServiceTreeId` are typically set only on the FIRST
+    # event of an investigation (e.g. `SignalEvaluationStart`); subsequent
+    # rows for the same xcv don't carry those properties. So the row-level
+    # filter "where CustomerName == X" would discard ~99% of trace events
+    # and leave each xcv looking nearly empty.
+    #
+    # Instead we run a 2-stage KQL: first identify the set of xcvs whose
+    # bootstrap event matches the requested customer, then count ALL rows
+    # for those xcvs (across all event types) so we can pick the richest.
+    kql = f"""
+let target_xcvs = AppTraces
+    | where TimeGenerated > ago({lookback_hours}h)
+    | where tostring(Properties.CustomerName) == '{safe_customer}'
+    | extend xcv             = tostring(Properties.xcv),
+             service_tree_id = tostring(Properties.ServiceTreeId),
+             service_name    = tostring(Properties.ServiceName)
+    | where isnotempty(xcv) and isnotempty(service_tree_id)
+    | summarize service_tree_id = any(service_tree_id),
+                service_name    = any(service_name)
+                by xcv;
+AppTraces
+| where TimeGenerated > ago({lookback_hours}h)
+| extend xcv = tostring(Properties.xcv)
+| where isnotempty(xcv)
+| join kind=inner (target_xcvs) on xcv
+| summarize event_count = count(),
+            last_seen   = max(TimeGenerated)
+            by xcv, service_tree_id, service_name
+| where event_count >= {min_events}
+| summarize arg_max(event_count, xcv, last_seen, service_name) by service_tree_id
+| project service_tree_id, service_name, xcv, event_count, last_seen
+| order by event_count desc
+"""
+
+    def _run() -> list[dict[str, Any]]:
+        cred = DefaultAzureCredential(
+            exclude_managed_identity_credential=True,
+            exclude_workload_identity_credential=True,
+            exclude_interactive_browser_credential=False,
+        )
+        client = LogsQueryClient(cred)
+        try:
+            resp = client.query_workspace(
+                workspace_id=workspace_id,
+                query=kql,
+                timespan=timedelta(hours=lookback_hours),
+            )
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+            try:
+                cred.close()
+            except Exception:
+                pass
+
+        if resp.status == LogsQueryStatus.FAILURE:
+            msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
+            raise HTTPException(502, f"Log Analytics query failed: {msg}")
+
+        out: list[dict[str, Any]] = []
+        for table in getattr(resp, "tables", None) or []:
+            cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
+            for row in table.rows:
+                rowd = dict(zip(cols, row))
+                stid = str(rowd.get("service_tree_id") or "").strip()
+                xcv = str(rowd.get("xcv") or "").strip()
+                if not stid or not xcv:
+                    continue
+                out.append(
+                    {
+                        "service_tree_id": stid,
+                        "service_name": str(rowd.get("service_name") or stid).strip() or stid,
+                        "xcv": xcv,
+                        "event_count": int(rowd.get("event_count") or 0),
+                        "last_seen": str(rowd.get("last_seen") or ""),
+                    }
+                )
+        return out
+
+    return await asyncio.to_thread(_run)
+
+
 @router.get("/{xcv}")
 async def get_trace(
     xcv: str,

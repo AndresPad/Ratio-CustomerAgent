@@ -30,6 +30,15 @@ export interface TraceLine {
   text: string;
   type: 'normal' | 'highlight' | 'success' | 'fail' | 'result';
   icon?: string;
+  /** Speaker (e.g. 'narrator', 'reasoner', 'triage_agent'). Optional — used
+   *  by the chat-style transcript view to attribute messages to agents. */
+  agent?: string;
+  /** Tool invoked, when this line represents a tool call. */
+  tool?: string;
+  /** Was this line produced from a real LLM reply (llm_response_text)?
+   *  Chat UI uses this to decide whether to render the message as a
+   *  full agent utterance vs a brief structural log line. */
+  isLlm?: boolean;
 }
 
 export interface ConfidenceScore {

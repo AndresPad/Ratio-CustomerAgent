@@ -42,8 +42,13 @@ const EVENT_LABELS: Record<string, string> = {
   ConfidenceScored: 'Computed confidence score for hypothesis',
 };
 
-/** Events to suppress from the trace display */
-const SUPPRESSED = new Set(['LLMCall', 'AgentPromptUsed', 'EndpointHit']);
+/** Events to suppress from the trace display.
+ *
+ * NOTE: `LLMCall` is intentionally NOT in this set even though it is
+ * voluminous — it is the only event type that carries `llm_response_text`
+ * (the raw LLM reply), which is what the user wants the Agent Reasoning
+ * panel to show. */
+const SUPPRESSED = new Set(['AgentPromptUsed', 'EndpointHit']);
 
 /** Icon for an event (case-insensitive) */
 function iconFor(ev: TraceEvent): string {
@@ -80,9 +85,20 @@ function lineText(ev: TraceEvent): string {
   const hyp = ev.HypothesisId ? ` ${ev.HypothesisId}` : '';
   const conf = ev.Confidence != null ? ` (${ev.Confidence}% confidence)` : '';
 
-  // Extract the full content -- this is the primary verbose message
+  // PRIORITY 1: If `llm_response_text` is present (flattened from
+  // Properties.ResponseText / Properties.llm_response_text in the
+  // AppTraces row), show it verbatim. The user explicitly wants the
+  // Agent Reasoning panel to render whatever is in that column without
+  // truncation, prefixes, or relabeling.
+  const llmResp = (ev as { llm_response_text?: unknown }).llm_response_text;
+  if (typeof llmResp === 'string' && llmResp.trim()) {
+    return llmResp.trim();
+  }
+
+  // Otherwise, fall back to the previous heuristic message-builder so
+  // non-LLM events still produce a reasonable label.
   let detail = '';
-  if (ev.Content) {
+  if (!detail && ev.Content) {
     let text = stripGuids(ev.Content);
     const pipeIdx = text.indexOf('|');
     if (pipeIdx > 0) text = text.substring(0, pipeIdx).trim();
@@ -363,11 +379,28 @@ export function useReplayFlow(): ReplayFlowResult {
         const lines: TraceLine[] = [];
         for (const ev of events) {
           if (SUPPRESSED.has(ev.EventName)) continue;
+          const agent =
+            (typeof ev.AgentName === 'string' && ev.AgentName) ||
+            (typeof (ev as { agent_name?: unknown }).agent_name === 'string'
+              ? (ev as { agent_name?: string }).agent_name
+              : undefined) ||
+            undefined;
+          const tool =
+            (typeof ev.ToolName === 'string' && ev.ToolName) ||
+            (typeof (ev as { tool_invoked?: unknown }).tool_invoked === 'string'
+              ? (ev as { tool_invoked?: string }).tool_invoked
+              : undefined) ||
+            undefined;
+          const llmResp = (ev as { llm_response_text?: unknown }).llm_response_text;
+          const isLlm = typeof llmResp === 'string' && llmResp.trim().length > 0;
           lines.push({
             stage: eventStage(ev),
             text: lineText(ev),
             type: lineType(ev),
             icon: iconFor(ev),
+            agent,
+            tool,
+            isLlm,
           });
         }
         setTraceLines(lines);

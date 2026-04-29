@@ -15,9 +15,21 @@ export default function ChaHomePage() {
   const now = new Date();
   const hour = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} · ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Build the time portion explicitly (12-hour clock with AM/PM) so the
+  // string is guaranteed non-empty regardless of how the runtime resolves
+  // toLocaleTimeString options. A previous version using
+  //   now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  // could render blank in some environments.
+  const rawHour = now.getHours();
+  const ampm = rawHour >= 12 ? 'PM' : 'AM';
+  const displayHour = rawHour % 12 === 0 ? 12 : rawHour % 12;
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const timeStr = `${displayHour}:${minutes} ${ampm}`;
+
+  const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} \u00b7 ${timeStr}`;
 
   const featured = scenarios.slice(0, 3);
 

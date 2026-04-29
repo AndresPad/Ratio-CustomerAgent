@@ -46,6 +46,18 @@ export interface RawFrame {
   [key: string]: unknown;
 }
 
+export interface ReplayServicesRequest {
+  customer_name: string;
+  start_time: string;
+  end_time: string;
+}
+
+export interface ReplayServiceOption {
+  service_tree_id: string;
+  service_name: string;
+  xcv: string;
+}
+
 // Both proxies route to the same CustomerAgent FastAPI (port 8503). Using
 // `/cha-live-api` consistently keeps all orchestration traffic on one
 // dev-proxy entry.
@@ -210,4 +222,49 @@ export async function getReplayHealth(): Promise<{
   } catch {
     return { status: 'error', workspace_configured: false };
   }
+}
+
+/**
+ * Return recent replayable services for a customer and time window.
+ *
+ * Sources from the local backend's `/api/traces/services` which scans the
+ * configured Log Analytics workspace for services with **actually-ingested**
+ * trace events. This avoids the cloud `/api/run/services` failure mode
+ * where freshly-spawned XCVs come back before AppTraces ingestion, leaving
+ * the reasoning panel empty.
+ */
+export async function getReplayServices(req: ReplayServicesRequest): Promise<ReplayServiceOption[]> {
+  // Convert the [start_time, end_time] window into a lookback-hours value
+  // (Log Analytics queries accept a `timespan`; the local endpoint takes
+  // `lookback_hours`). Default to 720h (30d) if the window is invalid.
+  let lookbackHours = 720;
+  try {
+    const start = new Date(req.start_time).getTime();
+    const end = new Date(req.end_time).getTime();
+    const nowMs = Date.now();
+    const earliest = Math.min(start, end);
+    const span = Math.max(1, Math.ceil((nowMs - earliest) / 3_600_000));
+    lookbackHours = Math.min(720, Math.max(1, span));
+  } catch {
+    /* fall back to default */
+  }
+
+  const url =
+    `${API_PREFIX}/api/traces/services` +
+    `?customer_name=${encodeURIComponent(req.customer_name)}` +
+    `&lookback_hours=${lookbackHours}`;
+
+  const res = await fetch(url, { method: 'GET' });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.clone().json();
+      if (j?.detail) detail = String(j.detail);
+    } catch {
+      // noop
+    }
+    throw new Error(`Replay services failed: ${detail}`);
+  }
+  const rows = (await res.json()) as ReplayServiceOption[];
+  return Array.isArray(rows) ? rows : [];
 }

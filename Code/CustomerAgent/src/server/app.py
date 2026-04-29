@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 # Path setup
 _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +31,7 @@ load_dotenv(os.path.join(_SRC_DIR, "..", ".env"))
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.agent_factory import create_agents, load_config
 from core.orchestrator import build_group_chat_workflow, run_workflow_streaming
@@ -115,8 +116,19 @@ async def _get_workflow():
 
 @app.on_event("startup")
 async def _startup():
-    """Eagerly initialize agents + A2A routes on server start."""
-    await _get_workflow()
+    """Eagerly initialize agents + A2A routes on server start.
+
+    Failures here are logged but do not abort startup so that endpoints
+    not requiring the LLM workflow (e.g. /health, /api/traces/*,
+    /api/run/services) remain available for local development without
+    an Azure OpenAI endpoint configured.
+    """
+    try:
+        await _get_workflow()
+    except Exception as exc:  # pragma: no cover - startup degradation
+        logger.warning(
+            "Workflow init failed (LLM endpoints will be unavailable): %s", exc
+        )
 
 
 # ── Request/Response models ──────────────────────────────────────────────────
@@ -248,6 +260,142 @@ class RunRequest(BaseModel):
     """
     customer_name: str | None = None
     service_tree_id: str | None = None
+
+
+class RunServicesRequest(BaseModel):
+    """Lookup request for replayable customer services."""
+
+    customer_name: str = Field(..., min_length=1, max_length=256)
+    start_time: str = Field(..., min_length=1, max_length=64)
+    end_time: str = Field(..., min_length=1, max_length=64)
+
+
+class RunServiceOption(BaseModel):
+    """Replayable service entry for UI service dropdowns."""
+
+    service_tree_id: str
+    service_name: str
+    xcv: str
+
+
+def _parse_utc_iso(value: str, field_name: str) -> datetime:
+    """Parse ISO-8601 input into a UTC datetime."""
+
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid {field_name}; expected ISO-8601 timestamp") from exc
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+@app.post("/api/run/services", response_model=list[RunServiceOption])
+async def run_services(req: RunServicesRequest):
+    """Return recent services with their latest XCV for a customer.
+
+    This is used by the UI replay flow so users can select service names
+    instead of manually entering correlation ids.
+    """
+
+    start_dt = _parse_utc_iso(req.start_time, "start_time")
+    end_dt = _parse_utc_iso(req.end_time, "end_time")
+    if end_dt <= start_dt:
+        raise HTTPException(400, "end_time must be after start_time")
+
+    workspace_id = os.getenv("LOG_ANALYTICS_WORKSPACE_ID", "").strip()
+    if not workspace_id:
+        # Demo fallback so the UI service dropdown is populated locally
+        # without a Log Analytics workspace. Real XCV replay will still
+        # fail until LOG_ANALYTICS_WORKSPACE_ID is configured.
+        logger.info("/api/run/services: workspace unconfigured, returning demo data")
+        demo = [
+            ("00000000-0000-0000-0000-000000000001", "Aladdin Trading",     "demo-xcv-aladdin-001"),
+            ("00000000-0000-0000-0000-000000000002", "Aladdin Risk",        "demo-xcv-risk-002"),
+            ("00000000-0000-0000-0000-000000000003", "Aladdin Compliance",  "demo-xcv-compliance-003"),
+            ("00000000-0000-0000-0000-000000000004", "Aladdin Reporting",   "demo-xcv-reporting-004"),
+        ]
+        return [
+            RunServiceOption(service_tree_id=stid, service_name=name, xcv=xcv)
+            for (stid, name, xcv) in demo
+        ]
+
+    customer = req.customer_name.replace("'", "''")
+    start_iso = start_dt.isoformat()
+    end_iso = end_dt.isoformat()
+    query = f"""
+AppTraces
+| where TimeGenerated between (datetime('{start_iso}') .. datetime('{end_iso}'))
+| where tostring(Properties.CustomerName) == '{customer}'
+| extend service_tree_id = tostring(Properties.ServiceTreeId),
+         service_name = tostring(Properties.ServiceName),
+         xcv = tostring(Properties.xcv)
+| where isnotempty(service_tree_id) and isnotempty(xcv)
+| summarize arg_max(TimeGenerated, service_name, xcv) by service_tree_id
+| project service_tree_id, service_name, xcv, TimeGenerated
+| order by TimeGenerated desc
+"""
+
+    def _run() -> list[RunServiceOption]:
+        try:
+            from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+            from azure.identity import DefaultAzureCredential
+        except ImportError as exc:  # pragma: no cover
+            raise HTTPException(
+                503,
+                f"azure-monitor-query is not installed: {exc}. Run "
+                "'pip install -r Code/CustomerAgent/requirements.txt'",
+            )
+
+        cred = DefaultAzureCredential(
+            exclude_managed_identity_credential=True,
+            exclude_workload_identity_credential=True,
+            exclude_interactive_browser_credential=False,
+        )
+        client = LogsQueryClient(cred)
+
+        try:
+            resp = client.query_workspace(
+                workspace_id=workspace_id,
+                query=query,
+                timespan=(start_dt, end_dt),
+            )
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+            try:
+                cred.close()
+            except Exception:
+                pass
+
+        if resp.status == LogsQueryStatus.FAILURE:
+            msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
+            raise HTTPException(502, f"Log Analytics query failed: {msg}")
+
+        out: list[RunServiceOption] = []
+        for table in getattr(resp, "tables", None) or []:
+            cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
+            for row in table.rows:
+                rowd = dict(zip(cols, row))
+                service_tree_id = str(rowd.get("service_tree_id") or "").strip()
+                service_name = str(rowd.get("service_name") or "").strip() or service_tree_id
+                xcv = str(rowd.get("xcv") or "").strip()
+                if not service_tree_id or not xcv:
+                    continue
+                out.append(
+                    RunServiceOption(
+                        service_tree_id=service_tree_id,
+                        service_name=service_name,
+                        xcv=xcv,
+                    )
+                )
+        return out
+
+    return await asyncio.to_thread(_run)
 
 
 @app.post("/api/run")

@@ -11,9 +11,8 @@
  * page owns the selected mode/xcv state and passes them to
  * `streamOrchestration()` in `api/orchestrationSource.ts`.
  */
-import { useEffect, useState, type CSSProperties } from 'react';
+import { type CSSProperties } from 'react';
 import type { OrchestrationMode } from '../api/orchestrationSource';
-import { getReplayHealth } from '../api/orchestrationSource';
 
 export interface DataSourceToggleProps {
   mode: OrchestrationMode;
@@ -48,15 +47,9 @@ const OPTIONS: { id: OrchestrationMode; label: string; icon: string; accent: str
 
 export function DataSourceToggle(props: DataSourceToggleProps) {
   const { mode, xcv, disabled, onModeChange, onXcvChange, agentFilter, onAgentFilterChange } = props;
-  const [replayAvailable, setReplayAvailable] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    getReplayHealth()
-      .then((h) => { if (alive) setReplayAvailable(h.workspace_configured); })
-      .catch(() => { if (alive) setReplayAvailable(false); });
-    return () => { alive = false; };
-  }, []);
+  // Polling/Replay mode is always available since the UI talks to the
+  // deployed Container App (cloud Log Analytics workspace is always
+  // configured); no health-gate needed.
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -66,21 +59,14 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
       <div role="radiogroup" aria-label="Event source" style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden' }}>
         {OPTIONS.map((opt, i) => {
           const selected = mode === opt.id;
-          const isReplay = opt.id === 'replay';
-          // Allow button to be clicked, but show warning in tooltip if not available
-          const buttonDisabled = Boolean(disabled);
+          const disabledOpt = Boolean(disabled);
           return (
             <button
               key={opt.id}
               role="radio"
               aria-checked={selected}
-              title={
-                buttonDisabled ? 'Toggle disabled' 
-                : isReplay && replayAvailable === false
-                ? 'Replay may not be fully configured — set LOG_ANALYTICS_WORKSPACE_ID and run `az login`. Clicking will attempt connection.'
-                : opt.title
-              }
-              disabled={buttonDisabled}
+              title={opt.title}
+              disabled={disabledOpt}
               onClick={() => onModeChange(opt.id)}
               style={{
                 ...BUTTON_BASE,
@@ -88,8 +74,8 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
                 borderRadius: 0,
                 background: selected ? opt.accent : BUTTON_BASE.background,
                 color: selected ? '#fff' : BUTTON_BASE.color,
-                opacity: buttonDisabled ? 0.45 : 1,
-                cursor: buttonDisabled ? 'not-allowed' : 'pointer',
+                opacity: disabledOpt ? 0.45 : 1,
+                cursor: disabledOpt ? 'not-allowed' : 'pointer',
               }}
             >
               <i className={`fas ${opt.icon}`} style={{ marginRight: 6 }} />
@@ -147,11 +133,6 @@ export function DataSourceToggle(props: DataSourceToggleProps) {
             <option value="entity_extractor" />
           </datalist>
         </>
-      )}
-      {mode === 'replay' && replayAvailable === false && (
-        <span style={{ fontSize: 10, color: '#b26a00' }}>
-          <i className="fas fa-triangle-exclamation" /> Workspace not configured
-        </span>
       )}
     </div>
   );

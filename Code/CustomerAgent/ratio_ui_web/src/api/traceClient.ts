@@ -19,6 +19,10 @@ export interface TraceEvent {
   SignalTitle?: string;
   RootCause?: string;
   Summary?: string;
+  /** Flattened from Properties.llm_response_text by the backend. The raw
+   *  LLM reply for this agent turn — typically the most readable
+   *  representation of what the agent "said" or "reasoned". */
+  llm_response_text?: string;
   [key: string]: unknown;
 }
 
