@@ -20,6 +20,7 @@ import ChaDataPage from './pages/customer-agent/ChaDataPage';
 import ChaKnowledgePage from './pages/customer-agent/ChaKnowledgePage';
 import ChaFlowExecPage from './pages/customer-agent/ChaFlowExecPage';
 import ChaFlowDetailPage from './pages/customer-agent/ChaFlowDetailPage';
+import ChaFlowDetailV4Page from './pages/customer-agent/ChaFlowDetailV4Page';
 import ChaNeuralCanvasV2Page from './pages/customer-agent/ChaNeuralCanvasV2Page';
 import { InvestigationFlowPage } from './pages/neeraj-version/InvestigationFlowPage';
 
@@ -82,6 +83,8 @@ function AppLayout() {
             <Route path="investigation-flow" element={<ChaFlowExecPage />} />
             <Route path="investigation-flow-v2" element={<ChaNeuralCanvasV2Page />} />
             <Route path="investigation-flow/detail" element={<ChaFlowDetailPage />} />
+            <Route path="investigation-flow-v4" element={<ChaFlowDetailV4Page />} />
+            <Route path="investigation-flow-v4/:xcv" element={<ChaFlowDetailV4Page />} />
             <Route path="investigation-flow/deep-dive" element={<InvestigationFlowPage />} />
             <Route path="investigation-flow/:xcv" element={<ChaFlowDetailPage />} />
           </Route>
