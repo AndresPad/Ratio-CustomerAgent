@@ -626,6 +626,18 @@ except Exception as _traces_exc:  # pragma: no cover - optional dep
     logger.warning("Traces replay API not registered: %s", _traces_exc)
 
 
+# \u2500\u2500 Teams channel API (Graph) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Lazily creates a Teams channel per XCV so the UI can offer "Join Teams
+# channel". Disabled gracefully when env vars (TEAMS_TENANT_ID,
+# TEAMS_CLIENT_ID, TEAMS_CLIENT_SECRET, TEAMS_TEAM_ID) are not set.
+try:
+    from server.teams_api import register_teams_routes  # noqa: E402
+
+    register_teams_routes(app)
+except Exception as _teams_exc:  # pragma: no cover - optional dep
+    logger.warning("Teams channel API not registered: %s", _teams_exc)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

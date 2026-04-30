@@ -375,15 +375,22 @@ let target_xcvs = AppTraces
                 by xcv;
 AppTraces
 | where TimeGenerated > ago({lookback_hours}h)
-| extend xcv = tostring(Properties.xcv)
+| extend xcv         = tostring(Properties.xcv),
+         agent_name  = coalesce(tostring(Properties.agent_name), tostring(Properties.AgentName), tostring(Properties.Agent))
 | where isnotempty(xcv)
 | join kind=inner (target_xcvs) on xcv
-| summarize event_count = count(),
-            last_seen   = max(TimeGenerated)
+| summarize event_count          = count(),
+            last_seen            = max(TimeGenerated),
+            has_action_planner   = countif(agent_name == 'action_planner') > 0
             by xcv, service_tree_id, service_name
 | where event_count >= {min_events}
-| summarize arg_max(event_count, xcv, last_seen, service_name) by service_tree_id
-| project service_tree_id, service_name, xcv, event_count, last_seen
+// Prefer xcvs whose run included the action_planner agent so the UI
+// can render a real Action Plan strip; fall back to the richest xcv
+// when no run with action_planner exists.
+| extend rank_score = iff(has_action_planner, 1, 0) * 10000000 + event_count
+| summarize arg_max(rank_score, xcv, event_count, last_seen, service_name, has_action_planner)
+            by service_tree_id
+| project service_tree_id, service_name, xcv, event_count, last_seen, has_action_planner
 | order by event_count desc
 """
 
@@ -430,6 +437,7 @@ AppTraces
                         "xcv": xcv,
                         "event_count": int(rowd.get("event_count") or 0),
                         "last_seen": str(rowd.get("last_seen") or ""),
+                        "has_action_planner": bool(rowd.get("has_action_planner") or False),
                     }
                 )
         return out

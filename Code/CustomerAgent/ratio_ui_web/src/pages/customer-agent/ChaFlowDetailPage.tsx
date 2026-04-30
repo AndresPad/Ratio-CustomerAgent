@@ -35,6 +35,7 @@ import {
   getReplayServices,
   type ReplayServiceOption,
 } from '../../api/orchestrationSource';
+import { ensureTeamsChannel, type TeamsChannelInfo } from '../../api/teamsChannel';
 
 const DEFAULT_CUSTOMER = 'BlackRock, Inc';
 const SERVICE_REFRESH_MS = 30_000;
@@ -450,6 +451,9 @@ interface ServicePanelProps {
 function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps) {
   const live = useReplayFlow();
   const lastXcv = useRef('');
+  const lastTeamsXcv = useRef('');
+  const [teamsChannel, setTeamsChannel] = useState<TeamsChannelInfo | null>(null);
+  const [teamsLoading, setTeamsLoading] = useState(false);
 
   // Auto-start a fresh replay whenever the service's XCV changes (the
   // services endpoint surfaces the latest XCV per service every 30s).
@@ -459,6 +463,35 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
     lastXcv.current = service.xcv;
     live.start(service.xcv);
   }, [service.xcv, live]);
+
+  // Lazily ensure a Teams channel exists for this XCV. Backend creates
+  // one on the first call and caches it; subsequent loads are cheap.
+  useEffect(() => {
+    if (!service.xcv) return;
+    if (lastTeamsXcv.current === service.xcv) return;
+    lastTeamsXcv.current = service.xcv;
+    setTeamsChannel(null);
+    setTeamsLoading(true);
+    ensureTeamsChannel({
+      xcv: service.xcv,
+      customer_name: DEFAULT_CUSTOMER,
+      service_name: service.service_name,
+      signal_title: live.signalTitle || `${service.service_name} \u2014 Investigation`,
+    })
+      .then((info) => setTeamsChannel(info))
+      .catch(() =>
+        setTeamsChannel({
+          enabled: false,
+          xcv: service.xcv,
+          channel_id: null,
+          web_url: null,
+          display_name: null,
+          created: false,
+          message: 'Teams integration unavailable',
+        }),
+      )
+      .finally(() => setTeamsLoading(false));
+  }, [service.xcv, service.service_name, live.signalTitle]);
 
   const reached = live.reached;
   const active = live.stage;
@@ -597,6 +630,8 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
           <i className={`fas ${running ? 'fa-spinner fa-spin' : 'fa-redo'}`} /> Reload
         </button>
 
+        <TeamsChannelButton info={teamsChannel} loading={teamsLoading} />
+
         {live.eventCount > 0 && (
           <span style={S.eventStats}>
             {'\u{1f4e6}'} {live.eventCount} events {'\u00b7'} {mapped} mapped {'\u00b7'}{' '}
@@ -720,6 +755,7 @@ const AGENT_META: Record<string, { label: string; role: string; color: string; i
   incident_collector:         { label: 'Incident Collector', role: 'Pulls IcM context',       color: '#00bfa5', icon: 'fa-solid fa-circle-exclamation' },
   sli_collector:              { label: 'SLI Collector',      role: 'Pulls telemetry',         color: '#26c6da', icon: 'fa-solid fa-chart-line' },
   support_collector:          { label: 'Support Collector',  role: 'Pulls support tickets',   color: '#ff9a76', icon: 'fa-solid fa-headset' },
+  runner:                     { label: 'Runner',             role: 'Executes tools / queries',color: '#fdcb6e', icon: 'fa-solid fa-play' },
   action_planner:             { label: 'Action Planner',     role: 'Drafts remediation steps',color: '#f06292', icon: 'fa-solid fa-list-check' },
 };
 
@@ -780,19 +816,17 @@ function inferAgentFromText(text: string): string {
   for (const [lbl, key] of labelToKey) {
     if (t.includes(lbl)) return key;
   }
-  // Common verbal cues. Note: we intentionally do NOT route
-  // "action plan / remediation / next steps" content to the action_plan
-  // agent here — the narrator routinely uses those phrases while the
-  // Reasoner is still talking. Real Action Plan agent output is shown
-  // separately at the bottom of the chat, sourced directly from
-  // events whose AgentName === 'action_plan_agent'.
+  // Common verbal cues. The narrator paraphrases what other agents do,
+  // so we map the most common phrasings to the agent they describe.
   if (/\bhypothes/i.test(text)) return 'reasoner';
   if (/\btriag/i.test(text)) return 'triage_agent';
-  if (/\bevidence|\bplan\b/i.test(text)) return 'evidence_planner';
+  if (/\bevidence|\bplan(ned|ning)?\b/i.test(text)) return 'evidence_planner';
   if (/\bincident|\bicm\b/i.test(text)) return 'incident_collector';
   if (/\bsli\b|telemetr|metric/i.test(text)) return 'sli_collector';
   if (/\bsupport|ticket/i.test(text)) return 'support_collector';
-  if (/\borchestrat|coordinat/i.test(text)) return 'investigation_orchestrator';
+  if (/\borchestrat|coordinat|delegat|hand(ed|ing)? off/i.test(text)) return 'investigation_orchestrator';
+  if (/\baction\s*plan|remediation|next steps?|mitigation|recommend/i.test(text)) return 'action_planner';
+  if (/\brun(ning|ner)?\b|execut(ing|ed)|kusto|query result|invoking/i.test(text)) return 'runner';
   return 'narrator';
 }
 
@@ -832,6 +866,32 @@ function ConversationHero({
   // so the conversation reads naturally.
   const chat = useMemo(() => buildChatTurns(visible), [visible]);
 
+  // Throttle chat reveal to one bubble at a time so the conversation
+  // reads like a real back-and-forth instead of dumping everything at
+  // once. The agent topology ring is driven by the same `revealedChat`
+  // array, so the highlighted speaker on the ring stays in sync with
+  // whichever bubble was just typed into the chat.
+  const PER_BUBBLE_MS = 1500;
+  const [revealedCount, setRevealedCount] = useState(0);
+  // Reset when a new investigation kicks off (chat goes empty).
+  useEffect(() => {
+    if (chat.length === 0) setRevealedCount(0);
+  }, [chat.length]);
+  useEffect(() => {
+    if (revealedCount >= chat.length) return;
+    // Always reveal one bubble at a time \u2014 even if the investigation
+    // already finished by the time the user opened this view, so the
+    // back-and-forth conversation never "snaps in" all at once.
+    const id = window.setTimeout(() => {
+      setRevealedCount((n) => Math.min(n + 1, chat.length));
+    }, PER_BUBBLE_MS);
+    return () => window.clearTimeout(id);
+  }, [revealedCount, chat.length]);
+  const revealedChat = useMemo(
+    () => chat.slice(0, Math.min(revealedCount, chat.length)),
+    [chat, revealedCount],
+  );
+
   // Real Action Plan agent utterances (LLM responses where AgentName ===
   // 'action_plan_agent'). These are shown in a separate collapsible
   // section at the bottom of the chat panel \u2014 the action plan is the
@@ -865,7 +925,7 @@ function ConversationHero({
     // excluded from the ring — they describe the action, they aren't
     // a participant in it.
     if (order.length < 3) {
-      const fallback = ['triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator', 'incident_collector', 'sli_collector', 'action_planner'];
+      const fallback = ['triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator', 'incident_collector', 'sli_collector', 'support_collector', 'runner', 'action_planner'];
       for (const f of fallback) {
         if (!seen.has(f)) order.push(f);
       }
@@ -873,19 +933,53 @@ function ConversationHero({
     return order.filter((a) => a !== 'narrator');
   }, [traceLines]);
 
+  // Drive the agent topology from the *revealed* chat so the ring
+  // lights up the agent that the just-typed bubble is talking about,
+  // AND from any real agent_name that has actually emitted an event
+  // in `visible` so far. The narrator paraphrases activity, so
+  // `inferAgentFromText` can't catch every speaker (notably the
+  // orchestrator, runner, and action_planner) — using the underlying
+  // event stream as a second source guarantees those nodes light up
+  // when their agents actually do work.
   const speakingAgents = useMemo(() => {
     const set = new Set<string>();
-    for (const ln of visible) if (ln.agent && ln.agent !== 'narrator') set.add(ln.agent);
+    for (const t of revealedChat) {
+      const a = inferAgentFromText(t.text);
+      if (a && a !== 'narrator') set.add(a);
+    }
+    for (const ln of visible) {
+      const raw = (ln.agent || '').toLowerCase();
+      if (!raw || raw === 'narrator') continue;
+      // Canonicalise *_tool collectors back to their parent collector
+      // name so the ring node lights up rather than rendering an
+      // unknown free-floating tool.
+      const canon =
+        raw === 'action_plan_agent'
+          ? 'action_planner'
+          : raw.endsWith('_tool')
+            ? raw.includes('incident')
+              ? 'incident_collector'
+              : raw.includes('sli')
+                ? 'sli_collector'
+                : raw.includes('support')
+                  ? 'support_collector'
+                  : 'runner'
+            : raw;
+      set.add(canon);
+    }
     return set;
-  }, [visible]);
+  }, [revealedChat, visible]);
 
-  // The most recent two non-narrator speakers — used to draw a single
-  // ephemeral line from the previous speaker to the current one.
+  // The most recent two distinct non-narrator speakers \u2014 used to draw a
+  // single ephemeral line from the previous speaker to the current one,
+  // staying in lockstep with the chat reveal. Falls back to the most
+  // recent real LLM event in `visible` when narrator text inference
+  // yields nothing (orchestrator/runner/action_planner phases).
   const { currentSpeaker, previousSpeaker } = useMemo(() => {
     let curr: string | null = null;
     let prev: string | null = null;
-    for (let i = visible.length - 1; i >= 0; i--) {
-      const a = visible[i].agent;
+    for (let i = revealedChat.length - 1; i >= 0; i--) {
+      const a = inferAgentFromText(revealedChat[i].text);
       if (!a || a === 'narrator') continue;
       if (curr === null) {
         curr = a;
@@ -896,8 +990,32 @@ function ConversationHero({
         break;
       }
     }
+    if (curr == null) {
+      // No narrator inference — fall back to the most recent revealed
+      // LLM event with a real agent_name.
+      for (let i = visible.length - 1; i >= 0; i--) {
+        const ln = visible[i];
+        if (!ln.isLlm) continue;
+        const raw = (ln.agent || '').toLowerCase();
+        if (!raw || raw === 'narrator') continue;
+        const canon =
+          raw === 'action_plan_agent'
+            ? 'action_planner'
+            : raw.endsWith('_tool')
+              ? 'runner'
+              : raw;
+        if (curr === null) {
+          curr = canon;
+          continue;
+        }
+        if (canon !== curr) {
+          prev = canon;
+          break;
+        }
+      }
+    }
     return { currentSpeaker: curr, previousSpeaker: prev };
-  }, [visible]);
+  }, [revealedChat, visible]);
 
   const reachedSet = useMemo(() => new Set(reached), [reached]);
   const activeColor = STAGE_COLOR[active];
@@ -906,7 +1024,7 @@ function ConversationHero({
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [chat.length]);
+  }, [revealedChat.length]);
 
   return (
     <div
@@ -1059,14 +1177,21 @@ function ConversationHero({
                     : 'Standing by\u2026'}
               </div>
             ) : (
-              chat.map((turn, i) => (
+              revealedChat.map((turn, i) => (
                 <ChatBubble key={`${turn.agent}-${i}`} turn={turn} />
               ))
             )}
-            {/* Typing indicator on the latest speaker while replay is running */}
-            {running && currentSpeaker && (
-              <ChatTyping agent={currentSpeaker} />
-            )}
+            {/* Typing indicator: shows for the *upcoming* speaker while
+                the next bubble is being prepared, falling back to the
+                latest revealed speaker once the chat catches up. */}
+            {(running || revealedCount < chat.length) &&
+              (revealedCount < chat.length
+                ? (
+                    <ChatTyping
+                      agent={inferAgentFromText(chat[revealedCount].text)}
+                    />
+                  )
+                : currentSpeaker && <ChatTyping agent={currentSpeaker} />)}
             <div ref={chatEndRef} />
           </div>
 
@@ -1617,12 +1742,75 @@ function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, badge }: R
 
 /* ── Action plan strip (output of the action_plan_agent, after reasoning) ── */
 
+function TeamsChannelButton({
+  info,
+  loading,
+}: {
+  info: TeamsChannelInfo | null;
+  loading: boolean;
+}) {
+  if (loading && !info) {
+    return (
+      <button
+        style={{ ...S.loadBtn, background: '#eee', color: '#555', cursor: 'wait' } as CSSProperties}
+        disabled
+      >
+        <i className="fas fa-spinner fa-spin" /> Teams{'\u2026'}
+      </button>
+    );
+  }
+  if (info?.enabled && info.web_url) {
+    return (
+      <a
+        href={info.web_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={
+          {
+            ...S.loadBtn,
+            background: '#4b53bc',
+            color: '#fff',
+            textDecoration: 'none',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          } as CSSProperties
+        }
+        title={
+          info.created
+            ? `New channel created: ${info.display_name || ''}`
+            : `Open channel: ${info.display_name || ''}`
+        }
+      >
+        <i className="fas fa-users" /> Join Teams channel
+      </a>
+    );
+  }
+  return (
+    <button
+      style={
+        {
+          ...S.loadBtn,
+          background: '#f5f5f5',
+          color: '#999',
+          cursor: 'not-allowed',
+        } as CSSProperties
+      }
+      disabled
+      title={info?.message || 'Teams integration not configured'}
+    >
+      <i className="fas fa-users-slash" /> Teams unavailable
+    </button>
+  );
+}
+
 function ActionPlanStrip({ items }: { items: { text: string; stage: InvestigationStage }[] }) {
   const meta = AGENT_META.action_planner;
   const color = meta.color;
   const hasItems = items.length > 0;
   return (
     <details
+      open={hasItems}
       style={{
         borderTop: '1px solid #1a2a44',
         background: hasItems
