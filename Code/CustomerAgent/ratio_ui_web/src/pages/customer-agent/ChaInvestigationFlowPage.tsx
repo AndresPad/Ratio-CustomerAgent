@@ -23,7 +23,8 @@ export type InvestigationStage =
   | 'evidence'
   | 'scoring'
   | 'reasoning'
-  | 'result';
+  | 'result'
+  | 'action_plan';
 
 export interface TraceLine {
   stage: InvestigationStage;
@@ -83,6 +84,7 @@ export interface NodeCounts {
   scoring: number;
   reasoning: number;
   result: string;
+  action_plan: number | string;
 }
 
 /* ================================================================
@@ -90,7 +92,7 @@ export interface NodeCounts {
    ================================================================ */
 
 export const INVESTIGATION_STAGES: InvestigationStage[] = [
-  'signal', 'symptom', 'hypothesis', 'evidence', 'scoring', 'reasoning', 'result',
+  'signal', 'symptom', 'hypothesis', 'evidence', 'scoring', 'reasoning', 'result', 'action_plan',
 ];
 
 export const STAGE_DISPLAY: Record<InvestigationStage, string> = {
@@ -101,6 +103,7 @@ export const STAGE_DISPLAY: Record<InvestigationStage, string> = {
   scoring: 'Confidence Sc.',
   reasoning: 'Reasoning',
   result: 'Result',
+  action_plan: 'Action Plan',
 };
 
 export const STAGE_ICON: Record<InvestigationStage, string> = {
@@ -111,6 +114,7 @@ export const STAGE_ICON: Record<InvestigationStage, string> = {
   scoring: 'fa-chart-bar',
   reasoning: 'fa-brain',
   result: 'fa-check-circle',
+  action_plan: 'fa-list-check',
 };
 
 export const STAGE_COLOR: Record<InvestigationStage, string> = {
@@ -121,6 +125,7 @@ export const STAGE_COLOR: Record<InvestigationStage, string> = {
   scoring: '#4d96ff',
   reasoning: '#845ec2',
   result: '#00bfa5',
+  action_plan: '#ff9a76',
 };
 
 const EDGE_LABELS: Record<string, string> = {
@@ -130,6 +135,7 @@ const EDGE_LABELS: Record<string, string> = {
   evidence: 'evidence item',
   scoring: '3 scored',
   reasoning: 'root cause',
+  result: 'remediation',
 };
 
 export const STAGE_DURATION: Record<InvestigationStage, number> = {
@@ -140,6 +146,7 @@ export const STAGE_DURATION: Record<InvestigationStage, number> = {
   scoring: 1500,
   reasoning: 3000,
   result: 1000,
+  action_plan: 1500,
 };
 
 /* ================================================================
@@ -174,6 +181,7 @@ export const MOCK_NODE_COUNTS: NodeCounts = {
   scoring: 4,
   reasoning: 78,
   result: '89%',
+  action_plan: 4,
 };
 
 export const MOCK_TRACE: TraceLine[] = [
@@ -618,6 +626,7 @@ const N8N_EDGE_LABELS: Record<string, string> = {
   'evidence->scoring': 'evidence items',
   'scoring->reasoning': '3 scored',
   'reasoning->result': 'root cause',
+  'result->action_plan': 'remediation',
 };
 
 interface N8nGraphProps {
@@ -679,6 +688,7 @@ export function N8nWorkflowGraph({ reached, active, counts, onNodeClick }: N8nGr
   const faGlyph: Record<InvestigationStage, string> = {
     signal: '\uf0e7', symptom: '\uf0f1', hypothesis: '\uf0eb',
     evidence: '\uf002', scoring: '\uf080', reasoning: '\uf5dc', result: '\uf058',
+    action_plan: '\uf0ae',
   };
 
   return (

@@ -193,6 +193,24 @@ function lineText(ev: TraceEvent): string {
 function eventStage(ev: TraceEvent): InvestigationStage {
   const n = (ev.EventName ?? '').toLowerCase();
   const content = (ev.Content ?? '').toLowerCase();
+  const agent = ((ev as { AgentName?: string; agent_name?: string }).AgentName
+    ?? (ev as { AgentName?: string; agent_name?: string }).agent_name
+    ?? '').toLowerCase();
+  const tool = ((ev as { ToolName?: string; tool_invoked?: string }).ToolName
+    ?? (ev as { ToolName?: string; tool_invoked?: string }).tool_invoked
+    ?? '').toLowerCase();
+
+  // Action plan beats result \u2014 it's the final stage now.
+  if (
+    agent.includes('action_plan') || agent.includes('actionplan')
+    || tool.includes('action_plan') || tool.includes('actionplan')
+    || tool.includes('remediation')
+    || n.includes('action_plan') || n.includes('actionplan')
+    || n.includes('remediation') || n.includes('mitigation')
+    || content.includes('action plan') || content.includes('remediation steps')
+    || content.includes('next steps') || content.includes('mitigation')
+  ) return 'action_plan';
+
   if (n.includes('signal') || n === 'requeststarted') return 'signal';
   if (n.includes('symptom')) return 'symptom';
   if (n.includes('hypothesis')) return 'hypothesis';
@@ -329,7 +347,7 @@ export function useReplayFlow(): ReplayFlowResult {
   /** Compute node counts from events */
   const computeCounts = (events: TraceEvent[], hyps: Hypothesis[]): NodeCounts => {
     const stageBuckets: Record<InvestigationStage, number> = {
-      signal: 0, symptom: 0, hypothesis: 0, evidence: 0, scoring: 0, reasoning: 0, result: 0,
+      signal: 0, symptom: 0, hypothesis: 0, evidence: 0, scoring: 0, reasoning: 0, result: 0, action_plan: 0,
     };
     for (const ev of events) {
       if (!SUPPRESSED.has(ev.EventName)) {
@@ -345,6 +363,7 @@ export function useReplayFlow(): ReplayFlowResult {
       scoring: stageBuckets.scoring || hyps.length,
       reasoning: stageBuckets.reasoning,
       result: `${topScore}%`,
+      action_plan: stageBuckets.action_plan,
     };
   };
 

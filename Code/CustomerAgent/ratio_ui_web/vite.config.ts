@@ -53,6 +53,15 @@ export default defineConfig({
         secure: true,
         rewrite: (path) => path.replace(/^\/cha-live-api/, ''),
       },
+      // Dedicated cloud-only prefix used by getReplayServices() so the
+      // local 8503 backend (which also has a /api/run/services route
+      // that returns IDs as service names) can't intercept.
+      '/cha-cloud-api': {
+        target: 'https://ca-ratio-customeragent-dev.graywater-ed11bb19.centralus.azurecontainerapps.io',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/cha-cloud-api/, ''),
+      },
     },
   },
 });

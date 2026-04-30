@@ -43,8 +43,8 @@ const SERVICE_REFRESH_MS = 30_000;
 // /api/run/services returns the most recent XCV per service for this
 // customer + window. Polling this window keeps the service tabs fresh
 // without requiring the user to pick start/end times.
-const REPLAY_WINDOW_START = '2026-04-16T10:00:00Z';
-const REPLAY_WINDOW_END = '2026-04-16T11:00:00Z';
+const REPLAY_WINDOW_START = '2026-04-16T01:00:00Z';
+const REPLAY_WINDOW_END = '2026-04-16T02:00:00Z';
 
 type ViewMode = 'pipeline' | 'graph';
 
@@ -472,6 +472,27 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
   const signalTitle = live.signalTitle || `${service.service_name} \u2014 Investigation`;
   const mapped = traceLines.length;
 
+  // Distinct evidence items collected during the investigation \u2014 we
+  // pick stage==='evidence' lines that name a tool, dedup by tool name,
+  // and cap at 12 so the tree stays readable.
+  const evidenceItems = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { label: string; tool: string }[] = [];
+    for (const ln of traceLines) {
+      if (ln.stage !== 'evidence') continue;
+      const tool = (ln.tool || '').trim();
+      if (!tool) continue;
+      const key = tool.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ label: tool, tool });
+      if (out.length >= 12) break;
+    }
+    return out;
+  }, [traceLines]);
+
+  const symptomItems = live.symptoms;
+
   // The most recent narration line that's actually been revealed,
   // condensed to one tight sentence so the per-service progress bar
   // stays demo-friendly and readable at a glance.
@@ -664,6 +685,14 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
           <SignalHeader title={signalTitle} status={complete ? 'Resolved' : 'In Progress'} />
         </div>
       </details>
+
+      {/* Relationship tree \u2014 Symptom \u2192 Hypothesis \u2192 Evidence */}
+      <RelationshipTree
+        signalTitle={signalTitle}
+        symptoms={symptomItems}
+        hypotheses={hypotheses}
+        evidence={evidenceItems}
+      />
     </div>
   );
 }
@@ -691,6 +720,7 @@ const AGENT_META: Record<string, { label: string; role: string; color: string; i
   incident_collector:         { label: 'Incident Collector', role: 'Pulls IcM context',       color: '#00bfa5', icon: 'fa-solid fa-circle-exclamation' },
   sli_collector:              { label: 'SLI Collector',      role: 'Pulls telemetry',         color: '#26c6da', icon: 'fa-solid fa-chart-line' },
   support_collector:          { label: 'Support Collector',  role: 'Pulls support tickets',   color: '#ff9a76', icon: 'fa-solid fa-headset' },
+  action_planner:             { label: 'Action Planner',     role: 'Drafts remediation steps',color: '#f06292', icon: 'fa-solid fa-list-check' },
 };
 
 /** Pick a sensible icon for any agent (known or unknown). */
@@ -750,7 +780,12 @@ function inferAgentFromText(text: string): string {
   for (const [lbl, key] of labelToKey) {
     if (t.includes(lbl)) return key;
   }
-  // Common verbal cues.
+  // Common verbal cues. Note: we intentionally do NOT route
+  // "action plan / remediation / next steps" content to the action_plan
+  // agent here — the narrator routinely uses those phrases while the
+  // Reasoner is still talking. Real Action Plan agent output is shown
+  // separately at the bottom of the chat, sourced directly from
+  // events whose AgentName === 'action_plan_agent'.
   if (/\bhypothes/i.test(text)) return 'reasoner';
   if (/\btriag/i.test(text)) return 'triage_agent';
   if (/\bevidence|\bplan\b/i.test(text)) return 'evidence_planner';
@@ -797,6 +832,23 @@ function ConversationHero({
   // so the conversation reads naturally.
   const chat = useMemo(() => buildChatTurns(visible), [visible]);
 
+  // Real Action Plan agent utterances (LLM responses where AgentName ===
+  // 'action_plan_agent'). These are shown in a separate collapsible
+  // section at the bottom of the chat panel \u2014 the action plan is the
+  // *output* of reasoning, not part of the back-and-forth.
+  const actionPlanItems = useMemo(() => {
+    const out: { text: string; stage: InvestigationStage }[] = [];
+    for (const ln of visible) {
+      const a = (ln.agent || '').toLowerCase();
+      if (a !== 'action_planner' && a !== 'action_plan_agent') continue;
+      if (!ln.isLlm) continue;
+      const t = (ln.text || '').trim();
+      if (!t) continue;
+      out.push({ text: t, stage: ln.stage });
+    }
+    return out;
+  }, [visible]);
+
   // Distinct agents that have spoken (in order of first appearance) — used
   // to lay out the circular topology.
   const cast = useMemo(() => {
@@ -813,7 +865,7 @@ function ConversationHero({
     // excluded from the ring — they describe the action, they aren't
     // a participant in it.
     if (order.length < 3) {
-      const fallback = ['triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator', 'incident_collector', 'sli_collector'];
+      const fallback = ['triage_agent', 'reasoner', 'evidence_planner', 'investigation_orchestrator', 'incident_collector', 'sli_collector', 'action_planner'];
       for (const f of fallback) {
         if (!seen.has(f)) order.push(f);
       }
@@ -1017,6 +1069,10 @@ function ConversationHero({
             )}
             <div ref={chatEndRef} />
           </div>
+
+          {/* Action plan strip \u2014 collapsed by default; opens to show what
+              the dedicated Action Plan agent produced AFTER reasoning. */}
+          <ActionPlanStrip items={actionPlanItems} />
         </div>
 
         {/* ── RIGHT: circular agent ring (non-linear topology) ── */}
@@ -1052,22 +1108,19 @@ interface ChatTurn {
  *  - runs of non-LLM structural events from the same agent become a
  *    single "thinking" sub-line so the conversation stays readable */
 function buildChatTurns(lines: TraceLine[]): ChatTurn[] {
-  // Only surface narrator LLM responses, but re-attribute each line to
-  // the agent it's actually about (e.g. "the Reasoner is forming a
-  // hypothesis…") and condense the prose to a tight one-liner so the
-  // demo audience can read it at a glance.
+  // Only surface narrator LLM responses (llm_response_text where
+  // agent === 'narrator'). Each line stays attributed to the narrator
+  // and is shown verbatim \u2014 no agent inference, no condensing.
   const out: ChatTurn[] = [];
   for (const ln of lines) {
     const agent = (ln.agent || '').toLowerCase();
     if (agent !== 'narrator') continue;
     if (!ln.isLlm) continue;
-    if (!ln.text || !ln.text.trim()) continue;
-    const summary = summarizeNarratorText(ln.text);
-    if (!summary) continue;
-    const speaker = inferAgentFromText(ln.text);
+    const text = (ln.text || '').trim();
+    if (!text) continue;
     out.push({
-      agent: speaker,
-      text: summary,
+      agent: 'narrator',
+      text,
       isLlm: true,
       stage: ln.stage,
       tools: [],
@@ -1256,7 +1309,451 @@ const typingDot: CSSProperties = {
   animation: 'cha-typing 1.1s ease-in-out infinite',
 };
 
-/* ── Circular agent topology ──────────────────────────────────── */
+/* ── Relationship graph (Symptom → Hypothesis → Evidence) ────
+   3-column SVG layout with bezier connectors, mirroring the look of
+   Neural Canvas v2's RelationshipGraph but driven by live trace data. */
+
+interface RelationshipTreeProps {
+  signalTitle: string;
+  symptoms: { title: string; hypothesis?: string; confidence?: number }[];
+  hypotheses: Hypothesis[];
+  evidence: { label: string; tool: string }[];
+}
+
+const REL_COL_W = 230;
+const REL_NODE_H = 56;
+const REL_NODE_GAP = 12;
+const REL_PAD_Y = 20;
+const REL_COL_GAP = 70;
+const REL_PAD_X = 20;
+const REL_COL_HEADER_H = 28;
+
+function RelationshipTree({
+  signalTitle,
+  symptoms,
+  hypotheses,
+  evidence,
+}: RelationshipTreeProps) {
+  const hasContent =
+    symptoms.length > 0 || hypotheses.length > 0 || evidence.length > 0;
+
+  // Node sets used for rendering. If symptoms haven't surfaced yet but
+  // hypotheses have, fall back to a single synthetic symptom so the
+  // graph still has a meaningful left column.
+  const symptomNodes = useMemo(() => {
+    if (symptoms.length > 0) return symptoms.map((s, i) => ({ id: `S${i}`, title: s.title }));
+    if (hypotheses.length > 0 || evidence.length > 0) {
+      return [{ id: 'S0', title: signalTitle || 'Detected symptoms' }];
+    }
+    return [];
+  }, [symptoms, hypotheses, evidence, signalTitle]);
+
+  // Edges: symptom -> hypothesis (round-robin), hypothesis -> evidence (round-robin).
+  const symHypEdges = useMemo(() => {
+    const out: { from: string; to: string }[] = [];
+    if (symptomNodes.length === 0) return out;
+    hypotheses.forEach((h, i) => {
+      out.push({ from: symptomNodes[i % symptomNodes.length].id, to: h.id });
+    });
+    return out;
+  }, [symptomNodes, hypotheses]);
+
+  const hypEvEdges = useMemo(() => {
+    const out: { from: string; to: string }[] = [];
+    if (hypotheses.length === 0) return out;
+    evidence.forEach((e, i) => {
+      out.push({ from: hypotheses[i % hypotheses.length].id, to: `E${i}` });
+    });
+    return out;
+  }, [hypotheses, evidence]);
+
+  const rows = Math.max(symptomNodes.length, hypotheses.length, evidence.length, 1);
+  const totalW = REL_PAD_X * 2 + REL_COL_W * 3 + REL_COL_GAP * 2;
+  const totalH =
+    REL_PAD_Y * 2 +
+    REL_COL_HEADER_H +
+    rows * REL_NODE_H +
+    Math.max(0, rows - 1) * REL_NODE_GAP;
+
+  // Helper: y-center of a node at index `i` in a column.
+  const nodeCY = (i: number) =>
+    REL_PAD_Y + REL_COL_HEADER_H + i * (REL_NODE_H + REL_NODE_GAP) + REL_NODE_H / 2;
+  const colX = (col: 0 | 1 | 2) => REL_PAD_X + col * (REL_COL_W + REL_COL_GAP);
+
+  const sympIdxById = new Map(symptomNodes.map((s, i) => [s.id, i]));
+  const hypIdxById = new Map(hypotheses.map((h, i) => [h.id, i]));
+
+  return (
+    <div
+      style={{
+        margin: '0 20px 20px',
+        background: '#fff',
+        border: '1px solid #e8e8e8',
+        borderRadius: 10,
+        padding: '14px 18px 18px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 12,
+          fontSize: 12,
+          fontWeight: 700,
+          color: '#444',
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+        }}
+      >
+        <i className="fas fa-project-diagram" style={{ color: '#3aa0ff' }} />
+        Relationship graph
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            color: '#888',
+            textTransform: 'none',
+            letterSpacing: 0,
+            marginLeft: 6,
+          }}
+        >
+          symptom &rarr; hypothesis &rarr; evidence
+        </span>
+      </div>
+
+      {!hasContent ? (
+        <div
+          style={{
+            color: '#999',
+            fontStyle: 'italic',
+            fontSize: 12.5,
+            padding: '12px 0',
+          }}
+        >
+          Waiting for the agent to surface symptoms, hypotheses, and evidence&hellip;
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <svg
+            width={totalW}
+            height={totalH}
+            viewBox={`0 0 ${totalW} ${totalH}`}
+            style={{ display: 'block', minWidth: totalW }}
+          >
+            <defs>
+              <marker id="rel-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 8 4 L 0 8 Z" fill="#b8c2d4" />
+              </marker>
+            </defs>
+
+            {/* Column headers */}
+            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon="\uf21e" />
+            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon="\uf0eb" />
+            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon="\uf0c3" />
+
+            {/* Edges: symptom -> hypothesis */}
+            {symHypEdges.map((e, i) => {
+              const sIdx = sympIdxById.get(e.from);
+              const hIdx = hypIdxById.get(e.to);
+              if (sIdx == null || hIdx == null) return null;
+              const x1 = colX(0) + REL_COL_W;
+              const y1 = nodeCY(sIdx);
+              const x2 = colX(1);
+              const y2 = nodeCY(hIdx);
+              const cx = (x1 + x2) / 2;
+              return (
+                <path
+                  key={`sh-${i}`}
+                  d={`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`}
+                  fill="none"
+                  stroke="#d8a6e8"
+                  strokeWidth={1.4}
+                  opacity={0.75}
+                  markerEnd="url(#rel-arrow)"
+                />
+              );
+            })}
+
+            {/* Edges: hypothesis -> evidence */}
+            {hypEvEdges.map((e, i) => {
+              const hIdx = hypIdxById.get(e.from);
+              if (hIdx == null) return null;
+              const eIdx = parseInt(e.to.slice(1), 10);
+              const x1 = colX(1) + REL_COL_W;
+              const y1 = nodeCY(hIdx);
+              const x2 = colX(2);
+              const y2 = nodeCY(eIdx);
+              const cx = (x1 + x2) / 2;
+              return (
+                <path
+                  key={`he-${i}`}
+                  d={`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`}
+                  fill="none"
+                  stroke="#a6c5e8"
+                  strokeWidth={1.4}
+                  opacity={0.75}
+                  markerEnd="url(#rel-arrow)"
+                />
+              );
+            })}
+
+            {/* Symptom nodes */}
+            {symptomNodes.map((s, i) => (
+              <RelNode
+                key={`sn-${s.id}`}
+                x={colX(0)}
+                y={nodeCY(i) - REL_NODE_H / 2}
+                w={REL_COL_W}
+                h={REL_NODE_H}
+                fill="#fff7ed"
+                stroke="#fdd9b5"
+                accent="#e67e22"
+                title={s.title}
+                subtitle="Symptom"
+              />
+            ))}
+
+            {/* Hypothesis nodes */}
+            {hypotheses.map((h, i) => (
+              <RelNode
+                key={`hn-${h.id}-${i}`}
+                x={colX(1)}
+                y={nodeCY(i) - REL_NODE_H / 2}
+                w={REL_COL_W}
+                h={REL_NODE_H}
+                fill="#f6f1ff"
+                stroke="#d9c5fb"
+                accent={h.badgeColor}
+                badge={h.id}
+                title={h.description}
+                subtitle={`${h.score}% confidence`}
+              />
+            ))}
+
+            {/* Evidence nodes */}
+            {evidence.map((e, i) => (
+              <RelNode
+                key={`en-${i}`}
+                x={colX(2)}
+                y={nodeCY(i) - REL_NODE_H / 2}
+                w={REL_COL_W}
+                h={REL_NODE_H}
+                fill="#eaf3ff"
+                stroke="#c9defc"
+                accent="#3498db"
+                title={e.label}
+                subtitle="Tool / Evidence"
+              />
+            ))}
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RelColHeader({ x, label, color, icon }: { x: number; label: string; color: string; icon: string }) {
+  return (
+    <g>
+      <text
+        x={x}
+        y={REL_PAD_Y + 14}
+        fontSize={11}
+        fontWeight={700}
+        fill={color}
+        style={{ textTransform: 'uppercase', letterSpacing: 0.6 }}
+      >
+        <tspan fontFamily='"Font Awesome 6 Free"' fontWeight={900} dx={0}>{icon}</tspan>
+        <tspan dx={6}>{label}</tspan>
+      </text>
+    </g>
+  );
+}
+
+interface RelNodeProps {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fill: string;
+  stroke: string;
+  accent: string;
+  title: string;
+  subtitle?: string;
+  badge?: string;
+}
+function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, badge }: RelNodeProps) {
+  // Truncate the title to fit within the node width.
+  const maxChars = badge ? 26 : 32;
+  const display = title.length > maxChars ? title.slice(0, maxChars - 1) + '\u2026' : title;
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} rx={8} ry={8} fill={fill} stroke={stroke} strokeWidth={1} />
+      <rect x={x} y={y} width={4} height={h} rx={2} ry={2} fill={accent} />
+      {badge ? (
+        <>
+          <rect x={x + 12} y={y + 9} width={56} height={16} rx={3} ry={3} fill={accent} />
+          <text x={x + 40} y={y + 21} fontSize={10} fontWeight={700} fill="#fff" textAnchor="middle">{badge}</text>
+          <text x={x + 76} y={y + 22} fontSize={11.5} fontWeight={600} fill="#1a1a2e">
+            <title>{title}</title>
+            {display}
+          </text>
+        </>
+      ) : (
+        <text x={x + 12} y={y + 22} fontSize={11.5} fontWeight={600} fill="#1a1a2e">
+          <title>{title}</title>
+          {display}
+        </text>
+      )}
+      {subtitle && (
+        <text x={x + 12} y={y + h - 12} fontSize={10} fill="#666">
+          {subtitle}
+        </text>
+      )}
+    </g>
+  );
+}
+
+/* ── Action plan strip (output of the action_plan_agent, after reasoning) ── */
+
+function ActionPlanStrip({ items }: { items: { text: string; stage: InvestigationStage }[] }) {
+  const meta = AGENT_META.action_planner;
+  const color = meta.color;
+  const hasItems = items.length > 0;
+  return (
+    <details
+      style={{
+        borderTop: '1px solid #1a2a44',
+        background: hasItems
+          ? `linear-gradient(180deg, rgba(240,98,146,.06), rgba(7,13,22,.65))`
+          : 'rgba(7,13,22,.65)',
+      }}
+    >
+      <summary
+        style={{
+          listStyle: 'none',
+          cursor: 'pointer',
+          padding: '10px 14px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+          color: '#cfd8e3',
+          userSelect: 'none',
+        }}
+      >
+        <i className={meta.icon} style={{ color }} />
+        <span style={{ fontWeight: 700 }}>Action Plan</span>
+        <span style={{ color: '#6e8197', fontWeight: 400 }}>
+          {hasItems
+            ? `${items.length} step${items.length === 1 ? '' : 's'} drafted after reasoning`
+            : 'pending \u2014 will appear after reasoning completes'}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontSize: 10,
+            color,
+            border: `1px solid ${color}55`,
+            background: `${color}15`,
+            padding: '2px 8px',
+            borderRadius: 999,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            fontWeight: 700,
+          }}
+        >
+          Action Plan Agent
+        </span>
+        <i className="fa-solid fa-chevron-down" style={{ color: '#6e8197', fontSize: 10 }} />
+      </summary>
+      <div
+        style={{
+          padding: '4px 14px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          maxHeight: 220,
+          overflowY: 'auto',
+        }}
+      >
+        {!hasItems ? (
+          <div
+            style={{
+              color: '#6e8197',
+              fontSize: 12,
+              fontStyle: 'italic',
+              padding: '8px 4px',
+            }}
+          >
+            The Action Plan agent runs once reasoning completes and posts its
+            remediation steps here.
+          </div>
+        ) : (
+          items.map((it, i) => {
+            const stageColor = STAGE_COLOR[it.stage];
+            return (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  gap: 10,
+                  padding: '8px 10px',
+                  background: 'rgba(255,255,255,.035)',
+                  border: `1px solid ${color}33`,
+                  borderLeft: `3px solid ${color}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: '#eaf2fb',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  animation: 'cha-narration-fade .35s ease both',
+                }}
+              >
+                <span
+                  style={{
+                    flexShrink: 0,
+                    width: 22,
+                    height: 22,
+                    borderRadius: '50%',
+                    background: color,
+                    color: '#0a121f',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {i + 1}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 9,
+                      color: stageColor,
+                      letterSpacing: 0.5,
+                      textTransform: 'uppercase',
+                      fontWeight: 700,
+                      marginBottom: 2,
+                    }}
+                  >
+                    {STAGE_DISPLAY[it.stage]}
+                  </div>
+                  {it.text}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </details>
+  );
+}
+
+/* \u2500\u2500 Circular agent topology \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
 interface AgentRingProps {
   cast: string[];

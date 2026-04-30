@@ -225,46 +225,79 @@ export async function getReplayHealth(): Promise<{
 }
 
 /**
- * Return recent replayable services for a customer and time window.
+ * Return replayable services for a customer + time window.
  *
- * Sources from the local backend's `/api/traces/services` which scans the
- * configured Log Analytics workspace for services with **actually-ingested**
- * trace events. This avoids the cloud `/api/run/services` failure mode
- * where freshly-spawned XCVs come back before AppTraces ingestion, leaving
- * the reasoning panel empty.
+ * Hybrid strategy:
+ *   1. Cloud `POST /api/run/services` is the source of truth for WHICH
+ *      services are impacted in the requested window.
+ *   2. The XCVs cloud returns are freshly spawned and rarely have any
+ *      AppTraces ingested yet \u2014 so the reasoning panel would be empty.
+ *      We swap each cloud XCV for the *richest already-ingested* XCV
+ *      per service from the local /api/traces/services endpoint, which
+ *      scans Log Analytics for XCVs with the most events.
+ *   3. If the cloud service is not present locally (no ingested
+ *      history), we keep the cloud XCV \u2014 the chat will be empty but
+ *      the service still appears.
  */
 export async function getReplayServices(req: ReplayServicesRequest): Promise<ReplayServiceOption[]> {
-  // Convert the [start_time, end_time] window into a lookback-hours value
-  // (Log Analytics queries accept a `timespan`; the local endpoint takes
-  // `lookback_hours`). Default to 720h (30d) if the window is invalid.
-  let lookbackHours = 720;
-  try {
-    const start = new Date(req.start_time).getTime();
-    const end = new Date(req.end_time).getTime();
-    const nowMs = Date.now();
-    const earliest = Math.min(start, end);
-    const span = Math.max(1, Math.ceil((nowMs - earliest) / 3_600_000));
-    lookbackHours = Math.min(720, Math.max(1, span));
-  } catch {
-    /* fall back to default */
-  }
-
-  const url =
-    `${API_PREFIX}/api/traces/services` +
-    `?customer_name=${encodeURIComponent(req.customer_name)}` +
-    `&lookback_hours=${lookbackHours}`;
-
-  const res = await fetch(url, { method: 'GET' });
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
+  // 1) Cloud: which services are impacted in this window.
+  const cloudUrl = `/cha-cloud-api/api/run/services`;
+  const cloudRes = await fetch(cloudUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      customer_name: req.customer_name,
+      start_time: req.start_time,
+      end_time: req.end_time,
+    }),
+  });
+  if (!cloudRes.ok) {
+    let detail = `${cloudRes.status} ${cloudRes.statusText}`;
     try {
-      const j = await res.clone().json();
+      const j = await cloudRes.clone().json();
       if (j?.detail) detail = String(j.detail);
     } catch {
       // noop
     }
     throw new Error(`Replay services failed: ${detail}`);
   }
-  const rows = (await res.json()) as ReplayServiceOption[];
-  return Array.isArray(rows) ? rows : [];
+  const cloudRows = (await cloudRes.json()) as ReplayServiceOption[];
+  const cloud = Array.isArray(cloudRows) ? cloudRows : [];
+
+  // 2) Local: best ingested XCV per service for the same customer.
+  //    Lookback is generous so we cover the requested window even when
+  //    AppTraces ingestion lags.
+  let localByServiceId = new Map<string, ReplayServiceOption>();
+  try {
+    const localUrl =
+      `/cha-live-api/api/traces/services` +
+      `?customer_name=${encodeURIComponent(req.customer_name)}` +
+      `&lookback_hours=720`;
+    const localRes = await fetch(localUrl, { method: 'GET' });
+    if (localRes.ok) {
+      const localRows = (await localRes.json()) as ReplayServiceOption[];
+      if (Array.isArray(localRows)) {
+        for (const r of localRows) {
+          if (r?.service_tree_id) localByServiceId.set(r.service_tree_id, r);
+        }
+      }
+    }
+  } catch {
+    // If the local endpoint is unreachable, fall back to cloud-only XCVs.
+    localByServiceId = new Map();
+  }
+
+  // 3) Merge: keep cloud's service list & display name, swap the XCV
+  //    for the richest local one when available.
+  return cloud.map((c) => {
+    const local = localByServiceId.get(c.service_tree_id);
+    if (local && local.xcv) {
+      return {
+        service_tree_id: c.service_tree_id,
+        service_name: c.service_name || local.service_name,
+        xcv: local.xcv,
+      };
+    }
+    return c;
+  });
 }
