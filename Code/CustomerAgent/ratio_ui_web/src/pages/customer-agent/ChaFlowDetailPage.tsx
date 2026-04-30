@@ -40,6 +40,11 @@ import {
   type ReplayServiceOption,
 } from '../../api/orchestrationSource';
 import { ensureTeamsChannel, type TeamsChannelInfo } from '../../api/teamsChannel';
+import {
+  notifyResolved,
+  subscribeEmail,
+  type SubscribeResponse,
+} from '../../api/emailNotifications';
 
 const DEFAULT_CUSTOMER = 'BlackRock, Inc';
 const SERVICE_REFRESH_MS = 30_000;
@@ -458,6 +463,8 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
   const lastTeamsXcv = useRef('');
   const [teamsChannel, setTeamsChannel] = useState<TeamsChannelInfo | null>(null);
   const [teamsLoading, setTeamsLoading] = useState(false);
+  const [emailSubscriberCount, setEmailSubscriberCount] = useState<number>(0);
+  const lastResolvedNotifiedXcv = useRef('');
 
   // Auto-start a fresh replay whenever the service's XCV changes (the
   // services endpoint surfaces the latest XCV per service every 30s).
@@ -476,6 +483,8 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
     lastTeamsXcv.current = service.xcv;
     setTeamsChannel(null);
     setTeamsLoading(true);
+    setEmailSubscriberCount(0);
+    lastResolvedNotifiedXcv.current = '';
     ensureTeamsChannel({
       xcv: service.xcv,
       customer_name: DEFAULT_CUSTOMER,
@@ -572,6 +581,41 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
     complete,
   ]);
 
+  // Fire the "investigation resolved" email exactly once per XCV when
+  // the replay reaches the final stage. The backend dedups by xcv so
+  // duplicate calls (re-renders, multiple tabs) are safe.
+  useEffect(() => {
+    if (!complete) return;
+    if (!service.xcv) return;
+    if (emailSubscriberCount <= 0) return;
+    if (lastResolvedNotifiedXcv.current === service.xcv) return;
+    lastResolvedNotifiedXcv.current = service.xcv;
+    const summaryText =
+      (rootCause?.text || '').trim() ||
+      latestNarration ||
+      `Investigation completed across ${reached.length} stages.`;
+    notifyResolved({
+      xcv: service.xcv,
+      customer_name: DEFAULT_CUSTOMER,
+      service_name: service.service_name,
+      summary: summaryText,
+      ui_url: typeof window !== 'undefined' ? window.location.href : undefined,
+      teams_web_url: teamsChannel?.web_url ?? undefined,
+    }).catch(() => {
+      // best-effort; reset so the user can retry on next reload
+      lastResolvedNotifiedXcv.current = '';
+    });
+  }, [
+    complete,
+    service.xcv,
+    service.service_name,
+    emailSubscriberCount,
+    rootCause?.text,
+    latestNarration,
+    reached.length,
+    teamsChannel?.web_url,
+  ]);
+
   const handleReload = () => live.start(service.xcv);
 
   // Render but hide non-active so they keep polling.
@@ -636,6 +680,20 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
         </button>
 
         <TeamsChannelButton info={teamsChannel} loading={teamsLoading} />
+
+        <EmailOptInButton
+          xcv={service.xcv}
+          customerName={DEFAULT_CUSTOMER}
+          serviceName={service.service_name}
+          signalTitle={signalTitle}
+          teamsWebUrl={teamsChannel?.web_url ?? null}
+          subscriberCount={emailSubscriberCount}
+          onSubscribed={(resp) => {
+            if (typeof resp.subscriber_count === 'number') {
+              setEmailSubscriberCount(resp.subscriber_count);
+            }
+          }}
+        />
 
         {live.eventCount > 0 && (
           <span style={S.eventStats}>
@@ -1803,16 +1861,233 @@ function TeamsChannelButton({
       style={
         {
           ...S.loadBtn,
-          background: '#f5f5f5',
-          color: '#999',
-          cursor: 'not-allowed',
+          background: '#1f9b6e',
+          color: '#fff',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
         } as CSSProperties
       }
-      disabled
-      title={info?.message || 'Teams integration not configured'}
+      title={info?.message || 'Teams integration not configured (demo)'}
+      onClick={(e) => e.preventDefault()}
     >
-      <i className="fas fa-users-slash" /> Teams unavailable
+      <i className="fas fa-users" /> Join Teams channel
     </button>
+  );
+}
+
+/* ── Email opt-in button ──────────────────────────────────────────────
+ * Lets a user supply their email and subscribe for "investigation
+ * started" + "investigation resolved" emails for this XCV. Backend
+ * sends the start email immediately and the resolved email is fired
+ * automatically by ServicePanel when the replay reaches its final stage.
+ */
+interface EmailOptInButtonProps {
+  xcv: string;
+  customerName: string;
+  serviceName: string;
+  signalTitle: string;
+  teamsWebUrl: string | null;
+  subscriberCount: number;
+  onSubscribed: (resp: SubscribeResponse) => void;
+}
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const EMAIL_STORAGE_KEY = 'cha-email-optin';
+
+function EmailOptInButton({
+  xcv,
+  customerName,
+  serviceName,
+  signalTitle,
+  teamsWebUrl,
+  subscriberCount,
+  onSubscribed,
+}: EmailOptInButtonProps) {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  // Pre-fill from prior session so users don't retype.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const v = window.localStorage.getItem(EMAIL_STORAGE_KEY);
+      if (v) setEmail(v);
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  // Reset transient feedback when the XCV changes.
+  useEffect(() => {
+    setStatus(null);
+    setError(null);
+  }, [xcv]);
+
+  const submit = async () => {
+    const cleaned = email.trim().toLowerCase();
+    if (!EMAIL_RE.test(cleaned)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const resp = await subscribeEmail({
+        xcv,
+        email: cleaned,
+        customer_name: customerName,
+        service_name: serviceName,
+        signal_title: signalTitle,
+        ui_url: typeof window !== 'undefined' ? window.location.href : undefined,
+        teams_web_url: teamsWebUrl ?? undefined,
+      });
+      try {
+        window.localStorage.setItem(EMAIL_STORAGE_KEY, cleaned);
+      } catch {
+        /* noop */
+      }
+      onSubscribed(resp);
+      if (!resp.enabled) {
+        setError(resp.message || 'Email integration is disabled on the server.');
+      } else if (resp.already_subscribed) {
+        setStatus('You are already subscribed for this XCV.');
+      } else {
+        setStatus(
+          resp.started_email_sent
+            ? 'Subscribed \u2014 a confirmation email is on the way.'
+            : 'Subscribed.',
+        );
+      }
+    } catch (err) {
+      setError((err as Error)?.message || 'Failed to subscribe');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        style={
+          {
+            ...S.loadBtn,
+            background: '#1f9b6e',
+            color: '#fff',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          } as CSSProperties
+        }
+        onClick={() => setOpen((v) => !v)}
+        title="Subscribe to email updates for this investigation"
+      >
+        <i className="fas fa-envelope" /> Email me updates
+        {subscriberCount > 0 && (
+          <span
+            style={{
+              background: 'rgba(255,255,255,.18)',
+              padding: '1px 6px',
+              borderRadius: 999,
+              fontSize: 10,
+              fontWeight: 700,
+            }}
+          >
+            {subscriberCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 50,
+            background: '#ffffff',
+            border: '1px solid #d6dde8',
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(15,30,55,.18)',
+            padding: 14,
+            width: 320,
+            color: '#1f2a3a',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+            Subscribe to investigation updates
+          </div>
+          <div style={{ fontSize: 12, color: '#6e7c91', marginBottom: 10 }}>
+            We’ll email you now and again when this investigation resolves.
+          </div>
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+            }}
+            disabled={submitting}
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '8px 10px',
+              border: '1px solid #c7d0de',
+              borderRadius: 6,
+              fontSize: 13,
+              outline: 'none',
+            }}
+          />
+          {error && (
+            <div style={{ marginTop: 8, color: '#c0392b', fontSize: 12 }}>{error}</div>
+          )}
+          {status && (
+            <div style={{ marginTop: 8, color: '#1f9b6e', fontSize: 12 }}>{status}</div>
+          )}
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button
+              style={
+                {
+                  ...S.loadBtn,
+                  background: '#eef1f6',
+                  color: '#1f2a3a',
+                } as CSSProperties
+              }
+              onClick={() => setOpen(false)}
+              disabled={submitting}
+            >
+              Close
+            </button>
+            <button
+              style={
+                {
+                  ...S.loadBtn,
+                  background: '#1f9b6e',
+                  color: '#fff',
+                  cursor: submitting ? 'wait' : 'pointer',
+                } as CSSProperties
+              }
+              onClick={submit}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <>
+                  <i className="fas fa-spinner fa-spin" /> Subscribing…
+                </>
+              ) : (
+                <>
+                  <i className="fas fa-paper-plane" /> Subscribe
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1874,7 +2149,7 @@ function ActionPlanStrip({ items }: { items: { text: string; stage: Investigatio
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          maxHeight: 220,
+          maxHeight: 460,
           overflowY: 'auto',
         }}
       >
@@ -2025,7 +2300,7 @@ function SandboxStrip({ runs }: SandboxStripProps) {
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          maxHeight: 320,
+          maxHeight: 560,
           overflowY: 'auto',
         }}
       >
@@ -2145,7 +2420,7 @@ function SandboxCodeBlock({ code, language }: { code: string; language: string }
         borderRadius: 8,
         fontSize: 12,
         lineHeight: 1.5,
-        maxHeight: 240,
+        maxHeight: 380,
         overflow: 'auto',
         color: '#eaf2fb',
         fontFamily:
@@ -2318,11 +2593,14 @@ function AgentRing({
                   strokeWidth={2}
                   strokeLinecap="round"
                   opacity={0.85}
+                  pathLength={1}
+                  strokeDasharray="1 1"
                   style={{ filter: `drop-shadow(0 0 6px ${activeColor})` }}
                 >
                   <animate
-                    attributeName="stroke-dasharray"
-                    values="0,200;120,200"
+                    attributeName="stroke-dashoffset"
+                    from="1"
+                    to="0"
                     dur="0.6s"
                     fill="freeze"
                   />

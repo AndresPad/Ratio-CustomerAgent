@@ -52,6 +52,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/cha-live-api/, ''),
       },
+      '/cha-live-api/api/email': {
+        target: 'http://127.0.0.1:8503',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cha-live-api/, ''),
+      },
       '/cha-live-api': {
         target: 'https://ca-ratio-customeragent-dev.graywater-ed11bb19.centralus.azurecontainerapps.io',
         changeOrigin: true,

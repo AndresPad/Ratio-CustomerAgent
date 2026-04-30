@@ -638,6 +638,17 @@ except Exception as _teams_exc:  # pragma: no cover - optional dep
     logger.warning("Teams channel API not registered: %s", _teams_exc)
 
 
+# ── Email notifications API (Graph sendMail) ────────────────────────────────
+# Lets users opt-in to "investigation started"/"investigation resolved"
+# emails for a given XCV. Disabled gracefully when env vars are missing.
+try:
+    from server.email_api import register_email_routes  # noqa: E402
+
+    register_email_routes(app)
+except Exception as _email_exc:  # pragma: no cover - optional dep
+    logger.warning("Email notification API not registered: %s", _email_exc)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
