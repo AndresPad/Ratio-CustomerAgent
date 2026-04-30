@@ -31,6 +31,10 @@ import {
 } from './ChaInvestigationFlowPage';
 import type { InvestigationStage, TraceLine } from './ChaInvestigationFlowPage';
 import { useReplayFlow } from '../../hooks/useReplayFlow';
+import type { SandboxRun } from '../../hooks/useReplayFlow';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/themes/prism-tomorrow.css';
 import {
   getReplayServices,
   type ReplayServiceOption,
@@ -592,6 +596,7 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
         complete={complete}
         traceLines={traceLines}
         visibleCount={visibleCount}
+        sandboxRuns={live.sandboxRuns}
       />
 
       {/* Control bar: service info + reload */}
@@ -743,6 +748,7 @@ interface ConversationHeroProps {
   complete: boolean;
   traceLines: TraceLine[];
   visibleCount: number;
+  sandboxRuns: SandboxRun[];
 }
 
 /** Agent display metadata: label, role description, color seed, icon. */
@@ -853,6 +859,7 @@ function ConversationHero({
   complete,
   traceLines,
   visibleCount,
+  sandboxRuns,
 }: ConversationHeroProps) {
   // Lines that have been "spoken" so far (drives both the chat and which
   // agents on the ring have already participated).
@@ -1198,6 +1205,11 @@ function ConversationHero({
           {/* Action plan strip \u2014 collapsed by default; opens to show what
               the dedicated Action Plan agent produced AFTER reasoning. */}
           <ActionPlanStrip items={actionPlanItems} />
+
+          {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
+              + sandbox_execution_complete events. Auto-shows while a run is
+              in flight; auto-hides 5s after success. */}
+          <SandboxStrip runs={sandboxRuns} />
         </div>
 
         {/* ── RIGHT: circular agent ring (non-linear topology) ── */}
@@ -1938,6 +1950,254 @@ function ActionPlanStrip({ items }: { items: { text: string; stage: Investigatio
         )}
       </div>
     </details>
+  );
+}
+
+/* ── Sandbox code-execution strip ──────────────────────────────────────
+ * Surfaces sandbox_code_generated + sandbox_execution_complete events
+ * (the agent's "I'm executing some Python" trace). Renders the full run
+ * history so it remains visible after the investigation resolves. The
+ * latest run is expanded by default; older runs collapse to a header and
+ * can be expanded on click.
+ */
+
+interface SandboxStripProps {
+  runs: SandboxRun[];
+}
+
+function SandboxStrip({ runs }: SandboxStripProps) {
+  if (!runs || runs.length === 0) return null;
+
+  // Newest run first so the operator sees the most recent execution at top.
+  const ordered = [...runs].reverse();
+  const latestId = ordered[0]?.id;
+  const anyFailed = runs.some((r) => r.success === false);
+  const anyInFlight = runs.some((r) => r.completedAtMs == null);
+  const headerAccent = anyFailed ? '#e74c3c' : anyInFlight ? '#fdcb6e' : '#27ae60';
+
+  return (
+    <details
+      style={{
+        borderTop: '1px solid #1a2a44',
+        background: 'rgba(7,13,22,.65)',
+      }}
+    >
+      <summary
+        style={{
+          listStyle: 'none',
+          cursor: 'pointer',
+          padding: '10px 14px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+          color: '#cfd8e3',
+          userSelect: 'none',
+        }}
+      >
+        <i className="fa-solid fa-flask" style={{ color: headerAccent }} />
+        <span style={{ fontWeight: 700 }}>Sandbox Executions</span>
+        <span style={{ color: '#6e8197', fontWeight: 400 }}>
+          {runs.length} run{runs.length === 1 ? '' : 's'}
+          {anyFailed ? ' \u2014 contains failures' : anyInFlight ? ' \u2014 in progress' : ''}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontSize: 10,
+            color: headerAccent,
+            border: `1px solid ${headerAccent}55`,
+            background: `${headerAccent}15`,
+            padding: '2px 8px',
+            borderRadius: 999,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            fontWeight: 700,
+          }}
+        >
+          Sandbox Coder
+        </span>
+        <i className="fa-solid fa-chevron-down" style={{ color: '#6e8197', fontSize: 10 }} />
+      </summary>
+      <div
+        style={{
+          padding: '4px 14px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          maxHeight: 320,
+          overflowY: 'auto',
+        }}
+      >
+        {ordered.map((run) => (
+          <SandboxRunCard key={run.id} run={run} defaultOpen={run.id === latestId} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+interface SandboxRunCardProps {
+  run: SandboxRun;
+  defaultOpen: boolean;
+}
+
+function SandboxRunCard({ run, defaultOpen }: SandboxRunCardProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  const inFlight = run.completedAtMs == null;
+  const failed = run.success === false;
+  const succeeded = run.success === true;
+  const accent = failed ? '#e74c3c' : succeeded ? '#27ae60' : '#fdcb6e';
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${accent}33`,
+        background: `linear-gradient(180deg, ${accent}10, rgba(7,13,22,.85))`,
+        borderRadius: 10,
+        animation: 'cha-narration-fade .3s ease both',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          background: 'transparent',
+          border: 'none',
+          color: '#cfd8e3',
+          fontSize: 12,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <i
+          className={
+            inFlight
+              ? 'fa-solid fa-spinner fa-spin'
+              : failed
+                ? 'fa-solid fa-circle-xmark'
+                : 'fa-solid fa-circle-check'
+          }
+          style={{ color: accent }}
+        />
+        <span style={{ fontWeight: 700 }}>{run.agent || 'sandbox'}</span>
+        <span style={{ color: '#6e8197', fontWeight: 400 }}>
+          {inFlight
+            ? `executing ${run.language} code\u2026`
+            : failed
+              ? `failed${run.error ? `: ${run.error}` : ''}`
+              : `completed in ${
+                  run.durationSeconds != null ? `${run.durationSeconds.toFixed(2)}s` : '\u2014'
+                }`}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontSize: 10,
+            color: accent,
+            border: `1px solid ${accent}55`,
+            background: `${accent}15`,
+            padding: '2px 8px',
+            borderRadius: 999,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            fontWeight: 700,
+          }}
+        >
+          {inFlight ? 'Running' : failed ? 'Failed' : 'Success'}
+        </span>
+        <i
+          className={`fa-solid ${open ? 'fa-chevron-up' : 'fa-chevron-down'}`}
+          style={{ color: '#6e8197', fontSize: 11 }}
+        />
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 12px' }}>
+          <SandboxCodeBlock code={run.code} language={run.language || 'python'} />
+          {!inFlight && (run.stdout || run.stderr) && (
+            <SandboxOutputBlock stdout={run.stdout} stderr={run.stderr} accent={accent} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SandboxCodeBlock({ code, language }: { code: string; language: string }) {
+  const langKey = (language || 'python').toLowerCase();
+  const grammar = Prism.languages[langKey] || Prism.languages.python;
+  const html = useMemo(
+    () => Prism.highlight(code || '', grammar, langKey),
+    [code, grammar, langKey],
+  );
+  return (
+    <pre
+      style={{
+        margin: 0,
+        padding: '10px 12px',
+        background: '#0b1220',
+        border: '1px solid #1c2c44',
+        borderRadius: 8,
+        fontSize: 12,
+        lineHeight: 1.5,
+        maxHeight: 240,
+        overflow: 'auto',
+        color: '#eaf2fb',
+        fontFamily:
+          '"JetBrains Mono", "Fira Code", "Consolas", "Monaco", monospace',
+      }}
+    >
+      <code
+        className={`language-${langKey}`}
+        // Prism produces token markup; this is the standard Prism pattern.
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </pre>
+  );
+}
+
+function SandboxOutputBlock({
+  stdout,
+  stderr,
+  accent,
+}: {
+  stdout: string;
+  stderr: string;
+  accent: string;
+}) {
+  const text = stderr ? stderr : stdout;
+  const isErr = !!stderr;
+  return (
+    <pre
+      style={{
+        margin: '8px 0 0',
+        padding: '8px 12px',
+        background: 'rgba(0,0,0,.45)',
+        border: `1px solid ${isErr ? '#e74c3c55' : `${accent}33`}`,
+        borderLeft: `3px solid ${isErr ? '#e74c3c' : accent}`,
+        borderRadius: 6,
+        fontSize: 12,
+        lineHeight: 1.5,
+        maxHeight: 200,
+        overflow: 'auto',
+        color: isErr ? '#ffb3a8' : '#cfeacd',
+        fontFamily:
+          '"JetBrains Mono", "Fira Code", "Consolas", "Monaco", monospace',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      }}
+    >
+      <span style={{ color: '#6e8197', fontSize: 10, letterSpacing: 0.5, fontWeight: 700 }}>
+        {isErr ? 'STDERR' : 'STDOUT'}
+      </span>
+      {'\n'}
+      {text}
+    </pre>
   );
 }
 

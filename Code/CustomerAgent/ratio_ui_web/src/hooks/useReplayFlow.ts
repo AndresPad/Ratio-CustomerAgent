@@ -236,6 +236,162 @@ export interface LiveSymptom {
   confidence?: number;
 }
 
+/* ── Sandbox runs (agent code execution events) ──────────────── */
+
+/**
+ * One end-to-end sandbox code execution. Built by pairing
+ * `sandbox_code_generated` events (which carry the source code) with the
+ * subsequent `sandbox_execution_complete` event (which carries stdout,
+ * success, duration_seconds, error). Pairing is by `execution_id` when
+ * present, otherwise by chronological order per agent.
+ */
+export interface SandboxRun {
+  id: string;
+  agent?: string;
+  language: string;
+  code: string;
+  generatedAtMs: number | null;
+  completedAtMs: number | null;
+  stdout: string;
+  stderr: string;
+  success: boolean | null;
+  durationSeconds: number | null;
+  error: string | null;
+}
+
+const _isSandboxGen = (ev: TraceEvent): boolean => {
+  const m = String(ev.Message ?? (ev as { message?: unknown }).message ?? '');
+  const en = String(ev.EventName ?? '');
+  return m.includes('sandbox_code_generated') || en === 'sandbox_code_generated';
+};
+
+const _isSandboxComplete = (ev: TraceEvent): boolean => {
+  const m = String(ev.Message ?? (ev as { message?: unknown }).message ?? '');
+  const en = String(ev.EventName ?? '');
+  return m.includes('sandbox_execution_complete') || en === 'sandbox_execution_complete';
+};
+
+const _str = (v: unknown): string => (v == null ? '' : String(v));
+const _num = (v: unknown): number | null => {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+};
+const _bool = (v: unknown): boolean | null => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).toLowerCase();
+  if (s === 'true' || s === '1') return true;
+  if (s === 'false' || s === '0') return false;
+  return null;
+};
+
+/** Pair sandbox_code_generated with sandbox_execution_complete events. */
+function buildSandboxRuns(events: TraceEvent[]): SandboxRun[] {
+  const out: SandboxRun[] = [];
+  const pendingByAgent = new Map<string, number>(); // agent → idx into out
+  const pendingById = new Map<string, number>();
+
+  for (const ev of events) {
+    const tsMs =
+      _parseEvtTsMs(ev) ?? null;
+    const agent = _str((ev as { Agent?: unknown }).Agent || ev.AgentName || (ev as { agent_name?: unknown }).agent_name);
+    const execId = _str(
+      (ev as { execution_id?: unknown }).execution_id ||
+        (ev as { ExecutionId?: unknown }).ExecutionId ||
+        (ev as { run_id?: unknown }).run_id,
+    );
+
+    if (_isSandboxGen(ev)) {
+      const code = _str(
+        (ev as { code?: unknown }).code ||
+          (ev as { Code?: unknown }).Code ||
+          (ev as { generated_code?: unknown }).generated_code ||
+          (ev as { source_code?: unknown }).source_code,
+      );
+      const language = _str(
+        (ev as { language?: unknown }).language ||
+          (ev as { Language?: unknown }).Language ||
+          'python',
+      ) || 'python';
+      if (!code) continue;
+      const run: SandboxRun = {
+        id: execId || `gen-${out.length}-${tsMs ?? 0}`,
+        agent: agent || undefined,
+        language,
+        code,
+        generatedAtMs: tsMs,
+        completedAtMs: null,
+        stdout: '',
+        stderr: '',
+        success: null,
+        durationSeconds: null,
+        error: null,
+      };
+      const idx = out.push(run) - 1;
+      if (execId) pendingById.set(execId, idx);
+      else if (agent) pendingByAgent.set(agent, idx);
+      continue;
+    }
+
+    if (_isSandboxComplete(ev)) {
+      let idx: number | undefined;
+      if (execId && pendingById.has(execId)) {
+        idx = pendingById.get(execId);
+        pendingById.delete(execId);
+      } else if (agent && pendingByAgent.has(agent)) {
+        idx = pendingByAgent.get(agent);
+        pendingByAgent.delete(agent);
+      } else if (out.length > 0) {
+        // Fallback: pair with the most recent unmatched run.
+        for (let i = out.length - 1; i >= 0; i--) {
+          if (out[i].completedAtMs == null) {
+            idx = i;
+            break;
+          }
+        }
+      }
+      if (idx == null) continue;
+      const run = out[idx];
+      run.completedAtMs = tsMs;
+      run.stdout = _str(
+        (ev as { stdout?: unknown }).stdout ||
+          (ev as { Stdout?: unknown }).Stdout ||
+          (ev as { output?: unknown }).output,
+      );
+      run.stderr = _str(
+        (ev as { stderr?: unknown }).stderr ||
+          (ev as { Stderr?: unknown }).Stderr,
+      );
+      run.success = _bool(
+        (ev as { success?: unknown }).success ?? (ev as { Success?: unknown }).Success,
+      );
+      run.durationSeconds = _num(
+        (ev as { duration_seconds?: unknown }).duration_seconds ??
+          (ev as { DurationSeconds?: unknown }).DurationSeconds ??
+          (ev as { Duration?: unknown }).Duration,
+      );
+      const err = _str(
+        (ev as { error?: unknown }).error || (ev as { Error?: unknown }).Error,
+      );
+      run.error = err || null;
+    }
+  }
+  return out;
+}
+
+function _parseEvtTsMs(ev: TraceEvent): number | null {
+  const t = ev.TimeGenerated || (ev as { event_timestamp?: unknown }).event_timestamp;
+  if (!t) return null;
+  try {
+    const s = String(t).replace('Z', '+00:00');
+    const ms = Date.parse(s);
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ── Main hook ───────────────────────────────────────────────── */
 
 export interface ReplayFlowResult {
@@ -249,6 +405,7 @@ export interface ReplayFlowResult {
   signalTitle: string;
   nodeCounts: NodeCounts;
   symptoms: LiveSymptom[];
+  sandboxRuns: SandboxRun[];
   loading: boolean;
   running: boolean;
   error: string | null;
@@ -268,6 +425,7 @@ export function useReplayFlow(): ReplayFlowResult {
   const [signalTitle, setSignalTitle] = useState('');
   const [nodeCounts, setNodeCounts] = useState<NodeCounts>({ signal: 0, symptom: 0, hypothesis: 0, evidence: 0, scoring: 0, reasoning: 0, result: '—' });
   const [symptoms, setSymptoms] = useState<LiveSymptom[]>([]);
+  const [sandboxRuns, setSandboxRuns] = useState<SandboxRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -382,6 +540,7 @@ export function useReplayFlow(): ReplayFlowResult {
     setSignalTitle('');
     setNodeCounts({ signal: 0, symptom: 0, hypothesis: 0, evidence: 0, scoring: 0, reasoning: 0, result: '—' });
     setSymptoms([]);
+    setSandboxRuns([]);
     setEventCount(0);
     setElapsed(0);
 
@@ -429,6 +588,7 @@ export function useReplayFlow(): ReplayFlowResult {
         setHypotheses(hyps);
         setConfidence(extractConfidence(hyps));
         setSymptoms(extractSymptoms(events));
+        setSandboxRuns(buildSandboxRuns(events));
 
         const counts = computeCounts(events, hyps);
         setNodeCounts(counts);
@@ -496,6 +656,7 @@ export function useReplayFlow(): ReplayFlowResult {
     signalTitle,
     nodeCounts,
     symptoms,
+    sandboxRuns,
     loading,
     running,
     error,

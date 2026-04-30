@@ -376,21 +376,26 @@ let target_xcvs = AppTraces
 AppTraces
 | where TimeGenerated > ago({lookback_hours}h)
 | extend xcv         = tostring(Properties.xcv),
-         agent_name  = coalesce(tostring(Properties.agent_name), tostring(Properties.AgentName), tostring(Properties.Agent))
+         agent_name  = coalesce(tostring(Properties.agent_name), tostring(Properties.AgentName), tostring(Properties.Agent)),
+         event_name  = tostring(Properties.EventName)
 | where isnotempty(xcv)
 | join kind=inner (target_xcvs) on xcv
 | summarize event_count          = count(),
             last_seen            = max(TimeGenerated),
-            has_action_planner   = countif(agent_name == 'action_planner') > 0
+            has_action_planner   = countif(agent_name == 'action_planner') > 0,
+            has_sandbox          = countif(event_name == 'sandbox_code_generated' or Message contains 'sandbox_code_generated') > 0
             by xcv, service_tree_id, service_name
 | where event_count >= {min_events}
-// Prefer xcvs whose run included the action_planner agent so the UI
-// can render a real Action Plan strip; fall back to the richest xcv
-// when no run with action_planner exists.
-| extend rank_score = iff(has_action_planner, 1, 0) * 10000000 + event_count
-| summarize arg_max(rank_score, xcv, event_count, last_seen, service_name, has_action_planner)
+// Prefer xcvs whose run included the action_planner agent AND a sandbox
+// code execution so the UI can render the Action Plan + Sandbox strips.
+// Sandbox bit is the highest-priority tier; action_planner is next; the
+// raw event_count is the tiebreaker.
+| extend rank_score = iff(has_sandbox, 1, 0) * 100000000
+                    + iff(has_action_planner, 1, 0) * 10000000
+                    + event_count
+| summarize arg_max(rank_score, xcv, event_count, last_seen, service_name, has_action_planner, has_sandbox)
             by service_tree_id
-| project service_tree_id, service_name, xcv, event_count, last_seen, has_action_planner
+| project service_tree_id, service_name, xcv, event_count, last_seen, has_action_planner, has_sandbox
 | order by event_count desc
 """
 
@@ -438,6 +443,7 @@ AppTraces
                         "event_count": int(rowd.get("event_count") or 0),
                         "last_seen": str(rowd.get("last_seen") or ""),
                         "has_action_planner": bool(rowd.get("has_action_planner") or False),
+                        "has_sandbox": bool(rowd.get("has_sandbox") or False),
                     }
                 )
         return out
