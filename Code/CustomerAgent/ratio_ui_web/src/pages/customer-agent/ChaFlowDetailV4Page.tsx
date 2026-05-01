@@ -1194,9 +1194,9 @@ function ConversationHero({
         margin: '12px 20px 4px',
         padding: '18px 22px 22px',
         background:
-          'radial-gradient(circle at 0% 0%, #1e3c72 0%, #15294f 30%, #0a1730 60%, #050b1a 100%)',
+          'radial-gradient(circle at 0% 0%, #1a2330 0%, #141b27 35%, #0e131c 70%, #0a0f17 100%)',
         borderRadius: 16,
-        border: '1px solid #1f3358',
+        border: '1px solid #2a3344',
         boxShadow: 'none',
         color: '#e3eaf3',
         position: 'relative',
@@ -2632,8 +2632,8 @@ function AgentRing({
   return (
     <div
       style={{
-        background: 'rgba(10,23,48,.7)',
-        border: '1px solid #1f3358',
+        background: 'rgba(20,27,39,.7)',
+        border: '1px solid #2a3344',
         borderRadius: 12,
         padding: '12px 12px 14px',
         display: 'flex',
