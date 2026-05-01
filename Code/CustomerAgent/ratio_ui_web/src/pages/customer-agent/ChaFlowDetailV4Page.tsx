@@ -77,6 +77,28 @@ export default function ChaFlowDetailV4Page() {
   const [servicesLoading, setServicesLoading] = useState(false);
   const [servicesError, setServicesError] = useState<string | null>(null);
 
+  // Theme toggle (V4 only). Persists across reloads via localStorage.
+  // Light mode is implemented via a CSS filter trick on a scoped wrapper:
+  // invert + hue-rotate gives an automatic light palette, and a few
+  // selectors un-invert content that should keep its true colors
+  // (raster images, prism code blocks, the SVG agent circles, and
+  // tinted foreign-objects in the topology).
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      const v = window.localStorage.getItem('chaV4Theme');
+      return v === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('chaV4Theme', theme);
+    } catch {
+      /* noop */
+    }
+  }, [theme]);
+
   // Progress snapshot per service, keyed by service_tree_id. ServicePanel
   // pushes updates here so the tab bar can render a live fill per service
   // (and so we can show a side-by-side overview at a glance).
@@ -150,15 +172,46 @@ export default function ChaFlowDetailV4Page() {
 
   return (
     <div
+      data-cha-theme={theme}
       style={{
         height: 'calc(100vh - 52px)',
         margin: '0 -24px -24px',
         position: 'relative',
         zIndex: 11,
         overflowY: 'auto',
-        background: '#fafafa',
+        background: theme === 'light' ? '#f5f7fb' : '#fafafa',
       }}
     >
+      {/* Light-theme override: a scoped CSS filter inverts the dark UI
+          underneath while preserving icons, images, code blocks, and the
+          colored agent circles in the topology. */}
+      <style>{`
+        /* ── Light theme: BootstrapDash-style clean white surfaces ── */
+        [data-cha-theme="light"] .cha-v4-themed {
+          filter: invert(1) hue-rotate(180deg);
+        }
+        /* Re-invert content that should keep its true colors:
+           rasters, code blocks, and any element flagged with
+           .cha-keep-color (vivid agent palette circles, gradient
+           accent strips, etc.). */
+        [data-cha-theme="light"] .cha-v4-themed img,
+        [data-cha-theme="light"] .cha-v4-themed video,
+        [data-cha-theme="light"] .cha-v4-themed pre[class*="language-"],
+        [data-cha-theme="light"] .cha-v4-themed code[class*="language-"],
+        [data-cha-theme="light"] .cha-v4-themed .cha-keep-color {
+          filter: invert(1) hue-rotate(180deg);
+        }
+        [data-cha-theme="light"] {
+          background: #f4f6fb;
+        }
+        /* Soft shadow under V4 panels in light mode for the
+           BootstrapDash card lift. The filter chain inverts box-shadow
+           color so we use a light shadow that becomes a soft dark one
+           after invert. */
+        [data-cha-theme="light"] .cha-v4-themed > div {
+          box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(255,255,255,0.06);
+        }
+      `}</style>
       {/* Top toolbar: back, view toggle */}
       <div
         style={{
@@ -201,6 +254,28 @@ export default function ChaFlowDetailV4Page() {
           <i className="fas fa-project-diagram" /> n8n Graph
         </button>
 
+        <div style={{ width: 1, height: 20, background: '#ddd', margin: '0 4px' }} />
+        <button
+          onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          style={{
+            padding: '4px 12px',
+            borderRadius: 6,
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            border: theme === 'light' ? '1px solid #f59e0b' : '1px solid #6366f1',
+            background: theme === 'light' ? '#fff7ed' : '#eef2ff',
+            color: theme === 'light' ? '#b45309' : '#4338ca',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <i className={theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon'} />
+          {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+        </button>
+
         <span style={{ flex: 1 }} />
 
         <span style={{ fontSize: 10, color: '#999' }}>
@@ -221,39 +296,43 @@ export default function ChaFlowDetailV4Page() {
         )}
       </div>
 
-      {/* Service tab bar */}
-      <ServiceTabs
-        services={serviceOptions}
-        activeId={activeServiceId}
-        progressMap={progressMap}
-        onSelect={setActiveServiceId}
-      />
-
-      {/* Render every service in parallel; toggle visibility so all keep
-          polling Log Analytics even when the operator looks at one. */}
-      {serviceOptions.length === 0 && (
-        <div
-          style={{
-            padding: '40px 20px',
-            color: '#666',
-            fontSize: 13,
-            textAlign: 'center',
-          }}
-        >
-          {servicesLoading
-            ? 'Looking up impacted services\u2026'
-            : 'No impacted services in the current window.'}
-        </div>
-      )}
-      {serviceOptions.map((svc) => (
-        <ServicePanel
-          key={svc.service_tree_id}
-          service={svc}
-          view={view}
-          isActive={svc.service_tree_id === activeServiceId}
-          onProgress={handleProgress}
+      {/* Themed content region. Everything inside .cha-v4-themed is
+          subject to the light-theme filter when data-cha-theme="light". */}
+      <div className="cha-v4-themed">
+        {/* Service tab bar */}
+        <ServiceTabs
+          services={serviceOptions}
+          activeId={activeServiceId}
+          progressMap={progressMap}
+          onSelect={setActiveServiceId}
         />
-      ))}
+
+        {/* Render every service in parallel; toggle visibility so all keep
+            polling Log Analytics even when the operator looks at one. */}
+        {serviceOptions.length === 0 && (
+          <div
+            style={{
+              padding: '40px 20px',
+              color: '#666',
+              fontSize: 13,
+              textAlign: 'center',
+            }}
+          >
+            {servicesLoading
+              ? 'Looking up impacted services\u2026'
+              : 'No impacted services in the current window.'}
+          </div>
+        )}
+        {serviceOptions.map((svc) => (
+          <ServicePanel
+            key={svc.service_tree_id}
+            service={svc}
+            view={view}
+            isActive={svc.service_tree_id === activeServiceId}
+            onProgress={handleProgress}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1115,15 +1194,29 @@ function ConversationHero({
         margin: '12px 20px 4px',
         padding: '18px 22px 22px',
         background:
-          'radial-gradient(circle at 15% -10%, #18243a 0%, #0a121f 55%, #04070d 100%)',
+          'radial-gradient(circle at 0% 0%, #1e3c72 0%, #15294f 30%, #0a1730 60%, #050b1a 100%)',
         borderRadius: 16,
-        border: '1px solid #1c2c44',
+        border: '1px solid #1f3358',
         boxShadow: 'none',
         color: '#e3eaf3',
         position: 'relative',
         overflow: 'hidden',
       }}
     >
+      {/* Top accent gradient strip (Light Blue / BootstrapDash style) */}
+      <div
+        aria-hidden
+        className="cha-keep-color"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 3,
+          background: 'linear-gradient(90deg, #06b6d4 0%, #4f6bed 50%, #ec4899 100%)',
+          opacity: 0.95,
+        }}
+      />
       {/* Header strip */}
       <div
         style={{
@@ -2539,15 +2632,31 @@ function AgentRing({
   return (
     <div
       style={{
-        background: 'rgba(7,13,22,.65)',
-        border: '1px solid #1a2a44',
+        background: 'rgba(10,23,48,.7)',
+        border: '1px solid #1f3358',
         borderRadius: 12,
         padding: '12px 12px 14px',
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
+        position: 'relative',
+        overflow: 'hidden',
       }}
     >
+      {/* Top accent gradient strip */}
+      <div
+        aria-hidden
+        className="cha-keep-color"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 2,
+          background: 'linear-gradient(90deg, #06b6d4 0%, #4f6bed 50%, #ec4899 100%)',
+          opacity: 0.9,
+        }}
+      />
       <div
         style={{
           display: 'flex',
@@ -2622,7 +2731,7 @@ function AgentRing({
                     fill="freeze"
                   />
                 </line>
-                <circle cx={mx} cy={my} r={3} fill={activeColor} opacity={0.9}>
+                <circle cx={mx} cy={my} r={3} fill={activeColor} opacity={0.9} className="cha-keep-color">
                   <animate
                     attributeName="r"
                     values="2;5;2"
@@ -2640,6 +2749,7 @@ function AgentRing({
             r={20}
             fill={complete ? '#00c853' : activeColor}
             opacity={0.85}
+            className="cha-keep-color"
           />
           <text
             x={cx}
@@ -2681,6 +2791,7 @@ function AgentRing({
               }}
             >
               <div
+                className={isCurrent || speaking ? 'cha-keep-color' : undefined}
                 style={{
                   width: nodeSize,
                   height: nodeSize,
