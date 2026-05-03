@@ -14,7 +14,7 @@
  * progress fill per service (X% \u00b7 currently on stage Y).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   WorkflowCanvas,
   N8nWorkflowGraph,
@@ -67,11 +67,10 @@ interface ServiceProgress {
   complete: boolean;
 }
 
-export default function ChaFlowDetailV4Page() {
+export default function ChaNeuralCanvasPage() {
   const { xcv: paramXcv } = useParams<{ xcv: string }>();
-  const navigate = useNavigate();
 
-  const [view, setView] = useState<ViewMode>('graph');
+  const [view] = useState<ViewMode>('graph');
   const [serviceOptions, setServiceOptions] = useState<ReplayServiceOption[]>([]);
   const [activeServiceId, setActiveServiceId] = useState('');
   const [servicesLoading, setServicesLoading] = useState(false);
@@ -83,7 +82,7 @@ export default function ChaFlowDetailV4Page() {
   // selectors un-invert content that should keep its true colors
   // (raster images, prism code blocks, the SVG agent circles, and
   // tinted foreign-objects in the topology).
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+  const [theme] = useState<'dark' | 'light'>(() => {
     try {
       const v = window.localStorage.getItem('chaV4Theme');
       return v === 'light' ? 'light' : 'dark';
@@ -119,6 +118,14 @@ export default function ChaFlowDetailV4Page() {
       }
       return { ...prev, [svcId]: prog };
     });
+  }, []);
+
+  // Reload-all coordination. Each ServicePanel's local Reload button
+  // bumps `reloadNonce`; every ServicePanel watches it and re-runs its
+  // own `live.start(service.xcv)` so all services reload in parallel.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const handleReloadAll = useCallback(() => {
+    setReloadNonce((n) => n + 1);
   }, []);
 
   // Periodically refresh the service list. Keep latest XCV per service
@@ -168,8 +175,6 @@ export default function ChaFlowDetailV4Page() {
     setActiveServiceId((match ?? serviceOptions[0]).service_tree_id);
   }, [serviceOptions, activeServiceId, paramXcv]);
 
-  const handleBack = () => navigate('/customer-agent/investigation-flow');
-
   return (
     <div
       data-cha-theme={theme}
@@ -179,103 +184,81 @@ export default function ChaFlowDetailV4Page() {
         position: 'relative',
         zIndex: 11,
         overflowY: 'auto',
-        background: theme === 'light' ? '#f5f7fb' : '#fafafa',
+        background: '#fafafa',
       }}
     >
-      {/* Light-theme override: a scoped CSS filter inverts the dark UI
-          underneath while preserving icons, images, code blocks, and the
-          colored agent circles in the topology. */}
+      {/* ── Light theme ────────────────────────────────────────────────
+          Strategy: scope the invert filter ONLY to the Investigation
+          Reasoning panel (.cha-v4-panel). Everything else — tabs,
+          service content, topology, agent reasoning below — stays in
+          its dark styling regardless of theme. The panel surface is
+          then re-skinned to a clean white BootstrapDash card with a
+          subtle navy-tinted shadow. */}
+      {/* ── Light theme ────────────────────────────────────────────────
+          Real BootstrapDash-style light theme — only the Investigation
+          Reasoning panel (.cha-v4-panel) is light. Everything else
+          (tabs, services, topology) stays dark. We target the panel's
+          dark inline styles (which use specific rgba() and hex values)
+          via attribute selectors so we don't need to refactor the whole
+          file to use CSS variables. */}
       <style>{`
-        /* ── Light theme: BootstrapDash-style clean white surfaces ── */
-        [data-cha-theme="light"] .cha-v4-themed {
-          filter: invert(1) hue-rotate(180deg);
+        /* ── Panel surface ─────────────────────────────────────────── */
+        [data-cha-theme="light"] .cha-v4-panel {
+          background: #ffffff !important;
+          border: 1px solid #e5eaf2 !important;
+          color: #1f2a3a !important;
+          box-shadow:
+            0 1px 0 rgba(255,255,255,0.6),
+            0 12px 32px -12px rgba(30,60,114,0.18) !important;
         }
-        /* Re-invert content that should keep its true colors:
-           rasters, code blocks, and any element flagged with
-           .cha-keep-color (vivid agent palette circles, gradient
-           accent strips, etc.). */
-        [data-cha-theme="light"] .cha-v4-themed img,
-        [data-cha-theme="light"] .cha-v4-themed video,
-        [data-cha-theme="light"] .cha-v4-themed pre[class*="language-"],
-        [data-cha-theme="light"] .cha-v4-themed code[class*="language-"],
-        [data-cha-theme="light"] .cha-v4-themed .cha-keep-color {
-          filter: invert(1) hue-rotate(180deg);
+
+        /* ── Sub-cards stay pure white ───────────────────────── */
+        [data-cha-theme="light"] .cha-v4-panel [style*="rgba(7,13,22,.65)"] {
+          background: #ffffff !important;
+          border-color: #eef1f6 !important;
         }
-        [data-cha-theme="light"] {
-          background: #f4f6fb;
+        [data-cha-theme="light"] .cha-v4-panel [style*="rgba(255,255,255,.04)"] {
+          background: #f7f9fc !important;
         }
-        /* Soft shadow under V4 panels in light mode for the
-           BootstrapDash card lift. The filter chain inverts box-shadow
-           color so we use a light shadow that becomes a soft dark one
-           after invert. */
-        [data-cha-theme="light"] .cha-v4-themed > div {
-          box-shadow: 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(255,255,255,0.06);
+        [data-cha-theme="light"] .cha-v4-panel [style*="rgba(255,255,255,.025)"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="rgba(255,255,255,.035)"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="rgba(255,255,255,.18)"] {
+          background: #ffffff !important;
+        }
+
+        /* ── Dividers/borders ─────────────────────────────────────── */
+        [data-cha-theme="light"] .cha-v4-panel [style*="#1a2a44"] {
+          border-color: #eef1f6 !important;
+        }
+
+        /* ── Text colors ──────────────────────────────────────────── */
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#cfd8e3'"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#e3eaf3'"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#eaf2fb'"] {
+          color: #1f2a3a !important;
+        }
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#7d92ad'"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#9fb1c7'"],
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#5d6f87'"] {
+          color: #6e7c91 !important;
+        }
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#6e8197'"] {
+          color: #8895a8 !important;
+        }
+        [data-cha-theme="light"] .cha-v4-panel [style*="color: '#0a121f'"] {
+          color: #ffffff !important;
         }
       `}</style>
-      {/* Top toolbar: back, view toggle */}
+      {/* Top toolbar: services status */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '8px 20px 0',
+          padding: '4px 20px 0',
           fontSize: 11,
         }}
       >
-        <button
-          onClick={handleBack}
-          style={{
-            padding: '4px 12px',
-            borderRadius: 6,
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            border: '1px solid #ddd',
-            background: '#fff',
-            color: '#666',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          <i className="fas fa-arrow-left" /> Back to Live
-        </button>
-        <div style={{ width: 1, height: 20, background: '#ddd', margin: '0 4px' }} />
-        <button
-          onClick={() => setView('pipeline')}
-          style={viewBtn(view === 'pipeline', '#00bfa5', '#e0f7fa', '#00796b')}
-        >
-          <i className="fas fa-stream" /> Pipeline
-        </button>
-        <button
-          onClick={() => setView('graph')}
-          style={viewBtn(view === 'graph', '#845ec2', '#f3e5f5', '#6a1b9a')}
-        >
-          <i className="fas fa-project-diagram" /> n8n Graph
-        </button>
-
-        <div style={{ width: 1, height: 20, background: '#ddd', margin: '0 4px' }} />
-        <button
-          onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          style={{
-            padding: '4px 12px',
-            borderRadius: 6,
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            border: theme === 'light' ? '1px solid #f59e0b' : '1px solid #6366f1',
-            background: theme === 'light' ? '#fff7ed' : '#eef2ff',
-            color: theme === 'light' ? '#b45309' : '#4338ca',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          <i className={theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon'} />
-          {theme === 'dark' ? 'Light theme' : 'Dark theme'}
-        </button>
-
         <span style={{ flex: 1 }} />
 
         <span style={{ fontSize: 10, color: '#999' }}>
@@ -330,29 +313,13 @@ export default function ChaFlowDetailV4Page() {
             view={view}
             isActive={svc.service_tree_id === activeServiceId}
             onProgress={handleProgress}
+            reloadNonce={reloadNonce}
+            onReloadAll={handleReloadAll}
           />
         ))}
       </div>
     </div>
   );
-}
-
-function viewBtn(
-  selected: boolean,
-  border: string,
-  bg: string,
-  fg: string,
-): CSSProperties {
-  return {
-    padding: '4px 12px',
-    borderRadius: 6,
-    fontSize: 11,
-    fontWeight: 600,
-    cursor: 'pointer',
-    border: selected ? `1px solid ${border}` : '1px solid #ddd',
-    background: selected ? bg : '#fff',
-    color: selected ? fg : '#888',
-  };
 }
 
 /* ── Service tab bar ───────────────────────────────────────────── */
@@ -534,9 +501,15 @@ interface ServicePanelProps {
   view: ViewMode;
   isActive: boolean;
   onProgress: (svcId: string, prog: ServiceProgress) => void;
+  /** Bumped by the parent when ANY panel's Reload is clicked, so every
+   *  service panel reloads its own replay in parallel. */
+  reloadNonce: number;
+  /** Click handler for this panel's Reload button — delegates to the
+   *  parent's reload-all coordinator (do not call `live.start` here). */
+  onReloadAll: () => void;
 }
 
-function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps) {
+function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onReloadAll }: ServicePanelProps) {
   const live = useReplayFlow();
   const lastXcv = useRef('');
   const lastTeamsXcv = useRef('');
@@ -553,6 +526,18 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
     lastXcv.current = service.xcv;
     live.start(service.xcv);
   }, [service.xcv, live]);
+
+  // Reload-all: when the parent bumps reloadNonce (any panel clicked
+  // Reload), restart this panel's replay from the same XCV. Skip the
+  // initial render (nonce starts at 0) so we don't double-fire alongside
+  // the xcv-change effect above.
+  const lastNonce = useRef(reloadNonce);
+  useEffect(() => {
+    if (reloadNonce === lastNonce.current) return;
+    lastNonce.current = reloadNonce;
+    if (!service.xcv) return;
+    live.start(service.xcv);
+  }, [reloadNonce, service.xcv, live]);
 
   // Lazily ensure a Teams channel exists for this XCV. Backend creates
   // one on the first call and caches it; subsequent loads are cheap.
@@ -695,7 +680,7 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
     teamsChannel?.web_url,
   ]);
 
-  const handleReload = () => live.start(service.xcv);
+  const handleReload = () => onReloadAll();
 
   // Render but hide non-active so they keep polling.
   const wrapperStyle: CSSProperties = useMemo(
@@ -754,8 +739,12 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
           XCV: {service.xcv}
         </span>
 
-        <button style={S.loadBtn} onClick={handleReload} disabled={running}>
-          <i className={`fas ${running ? 'fa-spinner fa-spin' : 'fa-redo'}`} /> Reload
+        <button
+          style={S.loadBtn}
+          onClick={handleReload}
+          title="Reload all impacted services"
+        >
+          <i className={`fas ${running ? 'fa-spinner fa-spin' : 'fa-redo'}`} /> Reload All
         </button>
 
         <TeamsChannelButton info={teamsChannel} loading={teamsLoading} />
@@ -1190,6 +1179,7 @@ function ConversationHero({
 
   return (
     <div
+      className="cha-v4-panel"
       style={{
         margin: '12px 20px 4px',
         padding: '18px 22px 22px',
@@ -1636,9 +1626,26 @@ const REL_COL_HEADER_H = 28;
 function RelationshipTree({
   signalTitle,
   symptoms,
-  hypotheses,
+  hypotheses: rawHypotheses,
   evidence,
 }: RelationshipTreeProps) {
+  // Dedupe hypotheses by normalized id (case + whitespace insensitive)
+  // keeping the first occurrence. Defends against upstream sources that
+  // surface the same hypothesis twice (e.g., `HYP-SLI-006` vs
+  // `hyp-sli-006 `) so the relationship graph never paints duplicate
+  // nodes in the same column.
+  const hypotheses = useMemo(() => {
+    const seen = new Set<string>();
+    const out: typeof rawHypotheses = [];
+    for (const h of rawHypotheses) {
+      const key = String(h.id ?? '').trim().toUpperCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(h);
+    }
+    return out;
+  }, [rawHypotheses]);
+
   const hasContent =
     symptoms.length > 0 || hypotheses.length > 0 || evidence.length > 0;
 
@@ -1753,9 +1760,9 @@ function RelationshipTree({
             </defs>
 
             {/* Column headers */}
-            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon="\uf21e" />
-            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon="\uf0eb" />
-            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon="\uf0c3" />
+            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon={'\uf21e'} />
+            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon={'\uf0eb'} />
+            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon={'\uf0c3'} />
 
             {/* Edges: symptom -> hypothesis */}
             {symHypEdges.map((e, i) => {
@@ -1869,7 +1876,7 @@ function RelColHeader({ x, label, color, icon }: { x: number; label: string; col
         fill={color}
         style={{ textTransform: 'uppercase', letterSpacing: 0.6 }}
       >
-        <tspan fontFamily='"Font Awesome 6 Free"' fontWeight={900} dx={0}>{icon}</tspan>
+        <tspan fontFamily='"Font Awesome 6 Free"' fontWeight={900}>{icon}</tspan>
         <tspan dx={6}>{label}</tspan>
       </text>
     </g>
@@ -1892,18 +1899,48 @@ function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, badge }: R
   // Truncate the title to fit within the node width.
   const maxChars = badge ? 26 : 32;
   const display = title.length > maxChars ? title.slice(0, maxChars - 1) + '\u2026' : title;
+  // Suppress the title text when it just echoes the badge (e.g., a
+  // hypothesis whose description fell back to its own id like
+  // "HYP-SLI-006"). The badge with the blue accent background already
+  // communicates that, and showing both reads as a duplicate.
+  const titleEchoesBadge =
+    !!badge && title.trim().toUpperCase() === badge.trim().toUpperCase();
+  // Size the badge pill to its text + horizontal padding so labels like
+  // "HYP-SLI-006" don't visually butt against the pill edges.
+  const BADGE_FONT = 10;
+  const BADGE_PAD_X = 2;
+  const BADGE_H = 18;
+  const BADGE_X = x + 12;
+  const BADGE_Y = y + 9;
+  // Approximate per-character width for a 10px sans-serif weight-700.
+  const badgeText = badge ?? '';
+  const badgeTextWidth = badgeText.length * (BADGE_FONT * 0.62);
+  const BADGE_W = Math.max(56, Math.ceil(badgeTextWidth + BADGE_PAD_X * 2));
+  const titleX = BADGE_X + BADGE_W + 8;
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} rx={8} ry={8} fill={fill} stroke={stroke} strokeWidth={1} />
       <rect x={x} y={y} width={4} height={h} rx={2} ry={2} fill={accent} />
       {badge ? (
         <>
-          <rect x={x + 12} y={y + 9} width={56} height={16} rx={3} ry={3} fill={accent} />
-          <text x={x + 40} y={y + 21} fontSize={10} fontWeight={700} fill="#fff" textAnchor="middle">{badge}</text>
-          <text x={x + 76} y={y + 22} fontSize={11.5} fontWeight={600} fill="#1a1a2e">
-            <title>{title}</title>
-            {display}
+          <rect x={BADGE_X} y={BADGE_Y} width={BADGE_W} height={BADGE_H} rx={4} ry={4} fill={accent} />
+          <text
+            x={BADGE_X + BADGE_W / 2}
+            y={BADGE_Y + BADGE_H / 2}
+            fontSize={BADGE_FONT}
+            fontWeight={700}
+            fill="#fff"
+            textAnchor="middle"
+            dominantBaseline="central"
+          >
+            {badge}
           </text>
+          {!titleEchoesBadge && (
+            <text x={titleX} y={y + 22} fontSize={11.5} fontWeight={600} fill="#1a1a2e">
+              <title>{title}</title>
+              {display}
+            </text>
+          )}
         </>
       ) : (
         <text x={x + 12} y={y + 22} fontSize={11.5} fontWeight={600} fill="#1a1a2e">
@@ -2669,7 +2706,7 @@ function AgentRing({
         <i className="fas fa-circle-nodes" style={{ color: activeColor }} />
         <span style={{ fontWeight: 700 }}>Agent Topology</span>
         <span style={{ color: '#6e8197', fontWeight: 400 }}>
-          {cast.length} agent{cast.length === 1 ? '' : 's'} {'\u00b7'} non-linear
+          {cast.length} agent{cast.length === 1 ? '' : 's'}
         </span>
       </div>
 
@@ -2742,24 +2779,27 @@ function AgentRing({
               </g>
             );
           })()}
-          {/* Center stage circle (no outward glow) */}
-          <circle
-            cx={cx}
-            cy={cy}
-            r={20}
-            fill={complete ? '#00c853' : activeColor}
-            opacity={0.85}
-            className="cha-keep-color"
-          />
+          {/* Center stage label — text only, no circle.
+              On completion it switches to a "Resolved" badge so the
+              audience instantly knows the investigation is done. Drop a
+              stronger text-shadow so the words remain legible over orbit
+              lines and the ephemeral hand-off arrow. */}
           <text
             x={cx}
-            y={cy + 4}
+            y={cy + 5}
             textAnchor="middle"
-            fontSize={11}
-            fontWeight={700}
-            fill="#0a121f"
+            fontSize={complete ? 17 : 15}
+            fontWeight={500}
+            fill={complete ? '#22ee9c' : '#ffffff'}
+            style={{
+              paintOrder: 'stroke',
+              stroke: 'rgba(10,18,31,0.85)',
+              strokeWidth: 4,
+              strokeLinejoin: 'round',
+              letterSpacing: complete ? 0.5 : 0,
+            }}
           >
-            {STAGE_DISPLAY[stage]}
+            {complete ? 'Resolved' : STAGE_DISPLAY[stage]}
           </text>
         </svg>
 

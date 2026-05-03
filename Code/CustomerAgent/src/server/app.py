@@ -33,6 +33,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from server.display_names import display_service_name
+
 from core.agent_factory import create_agents, load_config
 from core.orchestrator import build_group_chat_workflow, run_workflow_streaming
 from core.models import SignalBuilderResultModel
@@ -383,6 +385,7 @@ AppTraces
                 rowd = dict(zip(cols, row))
                 service_tree_id = str(rowd.get("service_tree_id") or "").strip()
                 service_name = str(rowd.get("service_name") or "").strip() or service_tree_id
+                service_name = display_service_name(service_name) or service_tree_id
                 xcv = str(rowd.get("xcv") or "").strip()
                 if not service_tree_id or not xcv:
                     continue

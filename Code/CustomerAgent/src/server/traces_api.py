@@ -32,6 +32,8 @@ from typing import Any, Iterable
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from server.display_names import display_service_name
+
 logger = logging.getLogger(__name__)
 
 # Ensure LOG_ANALYTICS_* env vars are loaded regardless of whether the
@@ -438,7 +440,7 @@ AppTraces
                 out.append(
                     {
                         "service_tree_id": stid,
-                        "service_name": str(rowd.get("service_name") or stid).strip() or stid,
+                        "service_name": display_service_name(str(rowd.get("service_name") or stid).strip() or stid) or stid,
                         "xcv": xcv,
                         "event_count": int(rowd.get("event_count") or 0),
                         "last_seen": str(rowd.get("last_seen") or ""),

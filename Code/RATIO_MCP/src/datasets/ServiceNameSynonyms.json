@@ -336,8 +336,10 @@
       "azure openai svc",
       "azure-openai-service"
     ],
-    "SQL Connectivity": [
-      "sql-connectivity"
+    "SQL": [
+      "sql connectivity",
+      "sql-connectivity",
+      "SQL Connectivity"
     ],
     "Azure Log Analytics": [
       "log analytics",

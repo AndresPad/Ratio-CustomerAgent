@@ -1643,9 +1643,9 @@ function RelationshipTree({
             </defs>
 
             {/* Column headers */}
-            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon="\uf21e" />
-            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon="\uf0eb" />
-            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon="\uf0c3" />
+            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon={'\uf21e'} />
+            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon={'\uf0eb'} />
+            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon={'\uf0c3'} />
 
             {/* Edges: symptom -> hypothesis */}
             {symHypEdges.map((e, i) => {
@@ -1759,7 +1759,7 @@ function RelColHeader({ x, label, color, icon }: { x: number; label: string; col
         fill={color}
         style={{ textTransform: 'uppercase', letterSpacing: 0.6 }}
       >
-        <tspan fontFamily='"Font Awesome 6 Free"' fontWeight={900} dx={0}>{icon}</tspan>
+        <tspan fontFamily='"Font Awesome 6 Free"' fontWeight={900}>{icon}</tspan>
         <tspan dx={6}>{label}</tspan>
       </text>
     </g>

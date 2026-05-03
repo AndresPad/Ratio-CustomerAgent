@@ -13,6 +13,7 @@
  * without changing their reducer logic.
  */
 import { MOCK_EVENTS } from '../fixtures/mockInvestigation';
+import { displayServiceName } from './displayNames';
 
 export type OrchestrationMode = 'live' | 'replay' | 'mock';
 
@@ -288,16 +289,18 @@ export async function getReplayServices(req: ReplayServicesRequest): Promise<Rep
   }
 
   // 3) Merge: keep cloud's service list & display name, swap the XCV
-  //    for the richest local one when available.
+  //    for the richest local one when available. Apply UI display-name
+  //    overrides so internal/legacy labels (e.g., "SQL Connectivity")
+  //    surface with their customer-facing names (e.g., "SQL").
   return cloud.map((c) => {
     const local = localByServiceId.get(c.service_tree_id);
     if (local && local.xcv) {
       return {
         service_tree_id: c.service_tree_id,
-        service_name: c.service_name || local.service_name,
+        service_name: displayServiceName(c.service_name || local.service_name),
         xcv: local.xcv,
       };
     }
-    return c;
+    return { ...c, service_name: displayServiceName(c.service_name) };
   });
 }
