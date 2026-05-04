@@ -332,7 +332,7 @@ export default function ChaFlowExecPage() {
           visibleCount={effectiveTraceCount}
           complete={effectiveComplete}
         />
-        <HypothesisPanel hypotheses={liveHypotheses} />
+        <HypothesisPanel hypotheses={liveHypotheses} showVerdicts={effectiveComplete} />
       </div>
 
       {/* Root Cause + Confidence + Summary */}

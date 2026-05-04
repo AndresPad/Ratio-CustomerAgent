@@ -1030,9 +1030,12 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         <span style={{ fontSize: 11, color: '#999' }}>{elapsed.toFixed(1)}s</span>
       </div>
 
-      {/* Hypothesis verdict (kept full-width below the hero) */}
+      {/* Hypothesis verdict (kept full-width below the hero). The
+          score bars / SUPPORTED-REFUTED labels are gated on `complete`
+          so the verdict numbers don't appear before the Reasoner has
+          actually finished scoring. */}
       <div style={{ padding: '16px 20px' }}>
-        <HypothesisPanel hypotheses={hypotheses} />
+        <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
       </div>
 
       {/* Root Cause + Confidence + Summary */}

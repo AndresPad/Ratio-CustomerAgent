@@ -528,9 +528,14 @@ export function ReasoningPanel({ traceLines, visibleCount, complete }: Reasoning
 
 interface HypPanelProps {
   hypotheses?: Hypothesis[];
+  /** When false, hide the score bar / percentage / SUPPORTED-REFUTED
+   *  status pill and the footer "selected at X%" line, because the
+   *  investigation has not finished reasoning yet. The hypothesis
+   *  rows themselves (id + description) still render. */
+  showVerdicts?: boolean;
 }
 
-export function HypothesisPanel({ hypotheses }: HypPanelProps) {
+export function HypothesisPanel({ hypotheses, showVerdicts = true }: HypPanelProps) {
   const hyps = hypotheses ?? MOCK_HYPOTHESES;
   const winner = hyps.length > 0 ? hyps[0] : null;
   return (
@@ -549,18 +554,22 @@ export function HypothesisPanel({ hypotheses }: HypPanelProps) {
               <span style={S.hypNum}>#{i + 1}</span>
               <span style={{ ...S.hypBadge, background: h.badgeColor }}>{h.id}</span>
               <span style={S.hypDesc as CSSProperties}>{h.description}</span>
-              <div style={S.hypBar}>
-                <div style={{ ...S.hypBarFill, width: `${h.score}%`, background: barColor }} />
-              </div>
-              <span style={{ ...S.hypPct, color: barColor } as CSSProperties}>{h.score}%</span>
-              <span style={S.hypStatus as CSSProperties}>
-                {h.status === 'supported' ? 'SUPPORTED' : h.status === 'refuted' ? 'REFUTED' : 'UNCERTAIN'}
-              </span>
+              {showVerdicts && (
+                <>
+                  <div style={S.hypBar}>
+                    <div style={{ ...S.hypBarFill, width: `${h.score}%`, background: barColor }} />
+                  </div>
+                  <span style={{ ...S.hypPct, color: barColor } as CSSProperties}>{h.score}%</span>
+                  <span style={S.hypStatus as CSSProperties}>
+                    {h.status === 'supported' ? 'SUPPORTED' : h.status === 'refuted' ? 'REFUTED' : 'UNCERTAIN'}
+                  </span>
+                </>
+              )}
             </div>
           );
         })}
       </div>
-      {winner && (
+      {showVerdicts && winner && (
         <div style={S.hypFooter}>
           <div style={S.hypFooterDot} />
           <span>{winner.id} selected at {winner.score}% -- {hyps.length - 1} ruled out.</span>
