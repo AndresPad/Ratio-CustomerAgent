@@ -1031,15 +1031,13 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
       </div>
 
       {/* Hypothesis verdict (kept full-width below the hero). The
-          panel itself is hidden until the narrator has started talking
-          through the hypothesis stage (so it appears in lock-step with
-          the relationship graph's Hypotheses column). The score bars /
-          SUPPORTED-REFUTED labels are additionally gated on `complete`
-          so the verdict numbers don't appear before the Reasoner has
-          actually finished scoring. */}
-      {narratedStageIdx >= HYP_IDX && (
+          panel only surfaces once the investigation is fully complete
+          (the reasoning chat has reached the "Investigation complete.
+          Root cause: ..." line), so the verdict scores and the panel
+          itself appear together at the very end of the demo. */}
+      {complete && (
         <div style={{ padding: '16px 20px' }}>
-          <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
+          <HypothesisPanel hypotheses={hypotheses} showVerdicts />
         </div>
       )}
 
