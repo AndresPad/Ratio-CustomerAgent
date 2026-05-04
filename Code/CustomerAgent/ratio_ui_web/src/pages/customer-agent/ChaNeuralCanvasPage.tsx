@@ -684,6 +684,47 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
     return '';
   }, [traceLines, visibleCount]);
 
+  // ── Narrator-paced reveal cursor ────────────────────────────────
+  // The chat panel inside ConversationHero throttles its own reveal at
+  // ~1.5s per LLM bubble. The relationship tree (Signal → Symptom →
+  // Hypothesis → Evidence) used to render directly off `live.symptoms`
+  // / `live.hypotheses`, which are populated by the mock replay timeline
+  // *much* faster than the narrator can talk through them — so the tree
+  // would race ahead of the chat. We replicate the same throttle here
+  // and derive `narratedStageIdx` (the highest INVESTIGATION_STAGES
+  // index the narrator has actually mentioned), then gate each column of
+  // the relationship tree on it so the tree fills in lock-step with the
+  // chat narration.
+  const narratorChat = useMemo(
+    () => buildChatTurns(traceLines.slice(0, Math.min(visibleCount, traceLines.length))),
+    [traceLines, visibleCount],
+  );
+  const NARRATOR_PER_BUBBLE_MS = 1500;
+  const [narratorRevealed, setNarratorRevealed] = useState(0);
+  useEffect(() => {
+    if (narratorChat.length === 0) setNarratorRevealed(0);
+  }, [narratorChat.length]);
+  useEffect(() => {
+    if (narratorRevealed >= narratorChat.length) return;
+    const id = window.setTimeout(() => {
+      setNarratorRevealed((n) => Math.min(n + 1, narratorChat.length));
+    }, NARRATOR_PER_BUBBLE_MS);
+    return () => window.clearTimeout(id);
+  }, [narratorRevealed, narratorChat.length]);
+  const narratedStageIdx = useMemo(() => {
+    let idx = -1;
+    const upTo = Math.min(narratorRevealed, narratorChat.length);
+    for (let i = 0; i < upTo; i++) {
+      const si = INVESTIGATION_STAGES.indexOf(narratorChat[i].stage);
+      if (si > idx) idx = si;
+    }
+    return idx;
+  }, [narratorChat, narratorRevealed]);
+  const SIG_IDX = INVESTIGATION_STAGES.indexOf('signal');
+  const SYM_IDX = INVESTIGATION_STAGES.indexOf('symptom');
+  const HYP_IDX = INVESTIGATION_STAGES.indexOf('hypothesis');
+  const EVD_IDX = INVESTIGATION_STAGES.indexOf('evidence');
+
   // Push compact progress to the parent so the tab bar can render a
   // live fill per service and the operator can compare side-by-side.
   useEffect(() => {
@@ -912,13 +953,16 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         </div>
       </details>
 
-      {/* Relationship tree — Signal → Symptom → Hypothesis → Evidence */}
+      {/* Relationship tree — Signal → Symptom → Hypothesis → Evidence.
+          Each column is gated on `narratedStageIdx` so the tree fills
+          in lock-step with the narrator: a column only appears once the
+          chat has actually talked through that stage. */}
       <RelationshipTree
         signalTitle={signalTitle}
-        signals={signalItems}
-        symptoms={symptomItems}
-        hypotheses={hypotheses}
-        evidence={evidenceItems}
+        signals={narratedStageIdx >= SIG_IDX ? signalItems : []}
+        symptoms={narratedStageIdx >= SYM_IDX ? symptomItems : []}
+        hypotheses={narratedStageIdx >= HYP_IDX ? hypotheses : []}
+        evidence={narratedStageIdx >= EVD_IDX ? evidenceItems : []}
       />
     </div>
   );
