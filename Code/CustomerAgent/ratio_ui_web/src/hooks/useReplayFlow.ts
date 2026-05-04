@@ -456,9 +456,9 @@ export function useReplayFlow(): ReplayFlowResult {
         else if (id.startsWith('HYP-OUT')) badgeColor = '#e67e22';
         hypMap.set(id, {
           id,
-          description: ev.HypothesisText ?? ev.Content ?? existing?.description ?? id,
+          description: ev.HypothesisText ?? ev.Content ?? existing?.description ?? '',
           score: conf,
-          status: conf >= 50 ? 'supported' : 'uncertain',
+          status: conf >= 50 ? 'supported' : 'refuted',
           badgeColor,
         });
       }
@@ -588,7 +588,10 @@ export function useReplayFlow(): ReplayFlowResult {
         setHypotheses(hyps);
         setConfidence(extractConfidence(hyps));
         setSymptoms(extractSymptoms(events));
-        setSandboxRuns(buildSandboxRuns(events));
+        // Sandbox runs reveal sequentially below (don't dump them all
+        // here — that misleads the audience into thinking everything
+        // already happened).
+        const allSandboxRuns = buildSandboxRuns(events);
 
         const counts = computeCounts(events, hyps);
         setNodeCounts(counts);
@@ -606,8 +609,11 @@ export function useReplayFlow(): ReplayFlowResult {
         const stageOrder = [...new Set(lines.map((l) => l.stage))];
         let lineIdx = 0;
         let delay = 300;
-        const totalDuration = 12000; // 12s replay
-        const perLine = Math.max(20, totalDuration / (lines.length + 1));
+        // Slowed total duration so narration has room to breathe during
+        // the demo recording; per-line cadence still scales with the
+        // number of events.
+        const totalDuration = 25000;
+        const perLine = Math.max(40, totalDuration / (lines.length + 1));
 
         stageOrder.forEach((s) => {
           const stageLines = lines.filter((l) => l.stage === s);
@@ -628,6 +634,39 @@ export function useReplayFlow(): ReplayFlowResult {
           });
         });
 
+        // Sandbox runs surface sequentially based on their actual
+        // `generatedAtMs` timestamps relative to the first run, so the
+        // SandboxStrip doesn't dump every run on first paint. The
+        // earliest run anchors at ~3s into the replay (the typical
+        // scoring/reasoning phase) and subsequent runs follow at their
+        // real spacing. Falls back to spacing them at perLine intervals
+        // when the timestamps are missing or all identical.
+        if (allSandboxRuns.length > 0) {
+          const validTs = allSandboxRuns
+            .map((r) => r.generatedAtMs)
+            .filter((t): t is number => typeof t === 'number');
+          const firstTs = validTs.length > 0 ? Math.min(...validTs) : 0;
+          // Anchor sandbox reveals roughly at 30% of the total replay
+          // (when scoring usually starts) so the strip doesn't appear
+          // before reasoning has visibly begun.
+          const sandboxAnchorMs = totalDuration * 0.3;
+          allSandboxRuns.forEach((run, i) => {
+            const relative =
+              typeof run.generatedAtMs === 'number'
+                ? run.generatedAtMs - firstTs
+                : i * perLine * 8;
+            const revealAt = sandboxAnchorMs + Math.max(0, relative);
+            timers.current.push(
+              setTimeout(() => {
+                setSandboxRuns((prev) => {
+                  if (prev.some((p) => p.id === run.id)) return prev;
+                  return [...prev, run];
+                });
+              }, revealAt),
+            );
+          });
+        }
+
         // Extract root cause after replay
         timers.current.push(setTimeout(() => {
           const rc = extractRootCause(events, hyps);
@@ -635,6 +674,10 @@ export function useReplayFlow(): ReplayFlowResult {
           setStage('result');
           setReached([...INVESTIGATION_STAGES]);
           setTraceCount(lines.length);
+          // Make sure every sandbox run is surfaced at the end (in case
+          // the staggered reveal hasn't covered every entry, e.g., when
+          // timestamps were missing).
+          setSandboxRuns(allSandboxRuns);
           setRunning(false);
           cancelAnimationFrame(raf.current);
         }, delay + 200));

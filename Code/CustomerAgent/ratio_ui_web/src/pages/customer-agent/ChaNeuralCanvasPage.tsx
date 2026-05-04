@@ -32,6 +32,9 @@ import {
 import type { InvestigationStage, TraceLine } from './ChaInvestigationFlowPage';
 import { useReplayFlow } from '../../hooks/useReplayFlow';
 import type { SandboxRun } from '../../hooks/useReplayFlow';
+import { useMockReplayFlow } from '../../hooks/useMockReplayFlow';
+import { useNeuralCanvasMode } from './neuralCanvasMode';
+import { MOCK_SERVICE_OPTIONS } from '../../fixtures/mockNeuralCanvasScript';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/themes/prism-tomorrow.css';
@@ -76,27 +79,10 @@ export default function ChaNeuralCanvasPage() {
   const [servicesLoading, setServicesLoading] = useState(false);
   const [servicesError, setServicesError] = useState<string | null>(null);
 
-  // Theme toggle (V4 only). Persists across reloads via localStorage.
-  // Light mode is implemented via a CSS filter trick on a scoped wrapper:
-  // invert + hue-rotate gives an automatic light palette, and a few
-  // selectors un-invert content that should keep its true colors
-  // (raster images, prism code blocks, the SVG agent circles, and
-  // tinted foreign-objects in the topology).
-  const [theme] = useState<'dark' | 'light'>(() => {
-    try {
-      const v = window.localStorage.getItem('chaV4Theme');
-      return v === 'light' ? 'light' : 'dark';
-    } catch {
-      return 'dark';
-    }
-  });
-  useEffect(() => {
-    try {
-      window.localStorage.setItem('chaV4Theme', theme);
-    } catch {
-      /* noop */
-    }
-  }, [theme]);
+  // Theme is fixed to dark — the per-page Light theme toggle was
+  // removed. Keep the constant so existing CSS scoped under
+  // `[data-cha-theme="dark"]` continues to apply.
+  const theme = 'dark' as const;
 
   // Progress snapshot per service, keyed by service_tree_id. ServicePanel
   // pushes updates here so the tab bar can render a live fill per service
@@ -128,10 +114,18 @@ export default function ChaNeuralCanvasPage() {
     setReloadNonce((n) => n + 1);
   }, []);
 
-  // Periodically refresh the service list. Keep latest XCV per service
-  // in a stable map so each ServicePanel's effect detects xcv changes
-  // and starts a fresh replay.
+  // Periodically refresh the service list. In mock mode we skip the
+  // network call entirely and use the canonical mock service list
+  // (SQL / AKS / VM / OpenAI) so the demo stays deterministic.
+  const mode = useNeuralCanvasMode();
   useEffect(() => {
+    if (mode === 'mock') {
+      setServiceOptions(MOCK_SERVICE_OPTIONS);
+      setServicesLoading(false);
+      setServicesError(null);
+      return;
+    }
+
     let alive = true;
 
     const refresh = async () => {
@@ -159,7 +153,7 @@ export default function ChaNeuralCanvasPage() {
       alive = false;
       window.clearInterval(t);
     };
-  }, []);
+  }, [mode]);
 
   // Pick a default active service when the list first arrives or when the
   // current selection disappears. Prefer the URL xcv param if it matches
@@ -510,7 +504,13 @@ interface ServicePanelProps {
 }
 
 function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onReloadAll }: ServicePanelProps) {
-  const live = useReplayFlow();
+  // Both hooks are always called (rules of hooks) but only the one
+  // matching the current mode is started; the other stays idle and
+  // returns its initial empty state.
+  const mode = useNeuralCanvasMode();
+  const liveFlow = useReplayFlow();
+  const mockFlow = useMockReplayFlow();
+  const live = mode === 'mock' ? mockFlow : liveFlow;
   const lastXcv = useRef('');
   const lastTeamsXcv = useRef('');
   const [teamsChannel, setTeamsChannel] = useState<TeamsChannelInfo | null>(null);
@@ -541,6 +541,8 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
 
   // Lazily ensure a Teams channel exists for this XCV. Backend creates
   // one on the first call and caches it; subsequent loads are cheap.
+  // In mock mode we synthesize a fake "Teams ready" object so the demo
+  // shows the affordance without making a real network call.
   useEffect(() => {
     if (!service.xcv) return;
     if (lastTeamsXcv.current === service.xcv) return;
@@ -549,6 +551,25 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
     setTeamsLoading(true);
     setEmailSubscriberCount(0);
     lastResolvedNotifiedXcv.current = '';
+
+    if (mode === 'mock') {
+      // Brief delay so the loading -> ready transition still reads as
+      // a real handshake on screen.
+      const t = window.setTimeout(() => {
+        setTeamsChannel({
+          enabled: true,
+          xcv: service.xcv,
+          channel_id: `mock-channel-${service.service_tree_id}`,
+          web_url: '#',
+          display_name: `${service.service_name} — Investigation`,
+          created: false,
+          message: 'Mock Teams channel',
+        });
+        setTeamsLoading(false);
+      }, 800);
+      return () => window.clearTimeout(t);
+    }
+
     ensureTeamsChannel({
       xcv: service.xcv,
       customer_name: DEFAULT_CUSTOMER,
@@ -574,8 +595,19 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
   const active = live.stage;
   const running = live.running || live.loading;
   const elapsed = live.elapsed;
-  const complete = reached.length === INVESTIGATION_STAGES.length && !running;
   const traceLines = live.traceLines;
+  const visibleCount = live.traceCount;
+  // Gate "complete" on:
+  //  - all investigation stages reached
+  //  - replay no longer running
+  //  - the chat reveal has actually caught up to all trace lines
+  // This prevents the "Resolved" badge and the Action Plan from
+  // appearing while the agents are visibly still talking.
+  const complete =
+    reached.length === INVESTIGATION_STAGES.length &&
+    !running &&
+    traceLines.length > 0 &&
+    visibleCount >= traceLines.length;
   const hypotheses = live.hypotheses;
   const rootCause = live.rootCause;
   const counts = live.nodeCounts;
@@ -603,10 +635,32 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
 
   const symptomItems = live.symptoms;
 
+  // Signals: stage==='signal' LLM lines that have actually been revealed
+  // so far. Cap at 3 so the leftmost column stays readable. Build
+  // sequentially with the chat reveal — the audience watches signals
+  // appear before symptoms before hypotheses.
+  const signalItems = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { title: string }[] = [];
+    const upTo = Math.min(visibleCount, traceLines.length);
+    for (let i = 0; i < upTo; i++) {
+      const ln = traceLines[i];
+      if (!ln || ln.stage !== 'signal') continue;
+      if (!ln.isLlm) continue;
+      const t = (ln.text || '').trim();
+      if (!t) continue;
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ title: t });
+      if (out.length >= 3) break;
+    }
+    return out;
+  }, [traceLines, visibleCount]);
+
   // The most recent narration line that's actually been revealed,
   // condensed to one tight sentence so the per-service progress bar
   // stays demo-friendly and readable at a glance.
-  const visibleCount = live.traceCount;
   const latestNarration = useMemo(() => {
     for (let i = Math.min(visibleCount, traceLines.length) - 1; i >= 0; i--) {
       const ln = traceLines[i];
@@ -852,9 +906,10 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         </div>
       </details>
 
-      {/* Relationship tree \u2014 Symptom \u2192 Hypothesis \u2192 Evidence */}
+      {/* Relationship tree — Signal → Symptom → Hypothesis → Evidence */}
       <RelationshipTree
         signalTitle={signalTitle}
+        signals={signalItems}
         symptoms={symptomItems}
         hypotheses={hypotheses}
         evidence={evidenceItems}
@@ -895,8 +950,18 @@ const AGENT_META: Record<string, { label: string; role: string; color: string; i
   python_executor:                   { label: 'Python Sandbox',     role: 'Executes Python in a sandbox', color: '#3b82f6', icon: 'fa-brands fa-python' },
   run_python_in_sandbox_tool:        { label: 'Python Sandbox',     role: 'Executes Python in a sandbox', color: '#3b82f6', icon: 'fa-brands fa-python' },
   execute_python_in_sandbox_tool:    { label: 'Python Sandbox',     role: 'Executes Python in a sandbox', color: '#3b82f6', icon: 'fa-brands fa-python' },
-  collect_impacted_resource_customer:      { label: 'Impacted Customers', role: 'Maps blast radius to customers', color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
-  collect_impacted_resource_customer_tool: { label: 'Impacted Customers', role: 'Maps blast radius to customers', color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
+  collect_impacted_resource_customer:        { label: 'Impacted Customers',        role: 'Maps blast radius to customers',         color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
+  collect_impacted_resource_customer_tool:   { label: 'Impacted Customers',        role: 'Maps blast radius to customers',         color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
+  collect_impacted_resource_multicustomer:        { label: 'Impacted (Multi)',     role: 'Maps cross-customer blast radius',       color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
+  collect_impacted_resource_multicustomer_tool:   { label: 'Impacted (Multi)',     role: 'Maps cross-customer blast radius',       color: '#f43f5e', icon: 'fa-solid fa-bullseye' },
+  collect_support_request:                   { label: 'Support Requests',          role: 'Pulls support tickets',                  color: '#f97316', icon: 'fa-solid fa-headset' },
+  collect_support_request_tool:              { label: 'Support Requests',          role: 'Pulls support tickets',                  color: '#f97316', icon: 'fa-solid fa-headset' },
+  collect_support_request_multicustomer:     { label: 'Support (Multi)',           role: 'Pulls cross-customer support tickets',   color: '#f97316', icon: 'fa-solid fa-headset' },
+  collect_support_request_multicustomer_tool:{ label: 'Support (Multi)',           role: 'Pulls cross-customer support tickets',   color: '#f97316', icon: 'fa-solid fa-headset' },
+  collect_customer_region:                   { label: 'Customer Region',           role: 'Resolves customer regions',              color: '#8b5cf6', icon: 'fa-solid fa-globe' },
+  collect_customer_region_tool:              { label: 'Customer Region',           role: 'Resolves customer regions',              color: '#8b5cf6', icon: 'fa-solid fa-globe' },
+  collect_incident_details:                  { label: 'Incident Details',          role: 'Pulls IcM incident details',             color: '#14b8a6', icon: 'fa-solid fa-circle-exclamation' },
+  collect_incident_details_tool:             { label: 'Incident Details',          role: 'Pulls IcM incident details',             color: '#14b8a6', icon: 'fa-solid fa-circle-exclamation' },
 };
 
 /** Pick a sensible icon for any agent (known or unknown). */
@@ -928,7 +993,12 @@ function colorForAgent(name: string): string {
 function labelForAgent(name: string): string {
   if (AGENT_META[name]) return AGENT_META[name].label;
   // Default: title-case underscored names ("collect_incident_details_tool" -> "Collect Incident Details").
-  const base = name.replace(/_tool$/, '').replace(/_/g, ' ');
+  // Strip the leading "collect_" prefix on collector tool names so the
+  // graph reads "Incident Details" instead of "Collect Incident Details".
+  const base = name
+    .replace(/_tool$/, '')
+    .replace(/^collect_/, '')
+    .replace(/_/g, ' ');
   return base.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -1121,16 +1191,21 @@ function ConversationHero({
     return set;
   }, [revealedChat, visible]);
 
-  // The most recent two distinct non-narrator speakers \u2014 used to draw a
+  // The most recent two distinct non-narrator speakers — used to draw a
   // single ephemeral line from the previous speaker to the current one,
-  // staying in lockstep with the chat reveal. Falls back to the most
-  // recent real LLM event in `visible` when narrator text inference
-  // yields nothing (orchestrator/runner/action_planner phases).
+  // staying in lockstep with the chat reveal.
+  //
+  // We use each chat turn's *explicit* `agent` attribution (set by
+  // `buildChatTurns`) rather than re-inferring from the text. This is
+  // critical for stages whose narration mentions other agents' tools —
+  // e.g., the Action Planner's "Create an IcM ticket" line would
+  // otherwise be misattributed to `incident_collector` because the text
+  // contains the keyword "IcM".
   const { currentSpeaker, previousSpeaker } = useMemo(() => {
     let curr: string | null = null;
     let prev: string | null = null;
     for (let i = revealedChat.length - 1; i >= 0; i--) {
-      const a = inferAgentFromText(revealedChat[i].text);
+      const a = (revealedChat[i].agent || '').toLowerCase();
       if (!a || a === 'narrator') continue;
       if (curr === null) {
         curr = a;
@@ -1142,8 +1217,7 @@ function ConversationHero({
       }
     }
     if (curr == null) {
-      // No narrator inference — fall back to the most recent revealed
-      // LLM event with a real agent_name.
+      // Fallback: most recent real LLM event with a non-narrator agent.
       for (let i = visible.length - 1; i >= 0; i--) {
         const ln = visible[i];
         if (!ln.isLlm) continue;
@@ -1353,16 +1427,28 @@ function ConversationHero({
               (revealedCount < chat.length
                 ? (
                     <ChatTyping
-                      agent={inferAgentFromText(chat[revealedCount].text)}
+                      agent={
+                        // Use the upcoming turn's explicit attribution
+                        // when present (mock + future live attribution),
+                        // and fall back to text inference for narrator
+                        // paraphrases.
+                        ((chat[revealedCount].agent || '').toLowerCase() &&
+                          (chat[revealedCount].agent || '').toLowerCase() !== 'narrator')
+                          ? (chat[revealedCount].agent || '').toLowerCase()
+                          : inferAgentFromText(chat[revealedCount].text)
+                      }
                     />
                   )
                 : currentSpeaker && <ChatTyping agent={currentSpeaker} />)}
             <div ref={chatEndRef} />
           </div>
 
-          {/* Action plan strip \u2014 collapsed by default; opens to show what
-              the dedicated Action Plan agent produced AFTER reasoning. */}
-          <ActionPlanStrip items={actionPlanItems} />
+          {/* Action plan strip — collapsed by default; opens to show
+              what the dedicated Action Plan agent produced AFTER
+              reasoning. Hidden entirely until the investigation is
+              fully complete so it never appears alongside in-flight
+              reasoning. */}
+          {complete && <ActionPlanStrip items={actionPlanItems} />}
 
           {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
               + sandbox_execution_complete events. Auto-shows while a run is
@@ -1403,18 +1489,23 @@ interface ChatTurn {
  *  - runs of non-LLM structural events from the same agent become a
  *    single "thinking" sub-line so the conversation stays readable */
 function buildChatTurns(lines: TraceLine[]): ChatTurn[] {
-  // Only surface narrator LLM responses (llm_response_text where
-  // agent === 'narrator'). Each line stays attributed to the narrator
-  // and is shown verbatim \u2014 no agent inference, no condensing.
+  // Surface every LLM line. For narrator paraphrases (live mode), infer
+  // who the narrator is talking about so the speaker label shows the
+  // actual agent (SLI Collector / Triage / Reasoner / etc.). For
+  // directly-attributed lines (mock fixtures, future live attribution),
+  // keep the declared agent so the chat shows real speakers.
   const out: ChatTurn[] = [];
   for (const ln of lines) {
-    const agent = (ln.agent || '').toLowerCase();
-    if (agent !== 'narrator') continue;
     if (!ln.isLlm) continue;
     const text = (ln.text || '').trim();
     if (!text) continue;
+    const rawAgent = (ln.agent || '').toLowerCase();
+    const agent =
+      !rawAgent || rawAgent === 'narrator'
+        ? inferAgentFromText(text)
+        : rawAgent;
     out.push({
-      agent: 'narrator',
+      agent,
       text,
       isLlm: true,
       stage: ln.stage,
@@ -1604,27 +1695,30 @@ const typingDot: CSSProperties = {
   animation: 'cha-typing 1.1s ease-in-out infinite',
 };
 
-/* ── Relationship graph (Symptom → Hypothesis → Evidence) ────
-   3-column SVG layout with bezier connectors, mirroring the look of
-   Neural Canvas v2's RelationshipGraph but driven by live trace data. */
+/* ── Relationship graph (Signal → Symptom → Hypothesis → Evidence) ──
+   4-column SVG layout with bezier connectors. Builds sequentially as
+   each stage advances — Signals first, then Symptoms, then Hypotheses,
+   then Evidence — so the audience can follow the investigation flow. */
 
 interface RelationshipTreeProps {
   signalTitle: string;
+  signals: { title: string }[];
   symptoms: { title: string; hypothesis?: string; confidence?: number }[];
   hypotheses: Hypothesis[];
   evidence: { label: string; tool: string }[];
 }
 
-const REL_COL_W = 230;
+const REL_COL_W = 200;
 const REL_NODE_H = 56;
 const REL_NODE_GAP = 12;
 const REL_PAD_Y = 20;
-const REL_COL_GAP = 70;
+const REL_COL_GAP = 56;
 const REL_PAD_X = 20;
 const REL_COL_HEADER_H = 28;
 
 function RelationshipTree({
   signalTitle,
+  signals,
   symptoms,
   hypotheses: rawHypotheses,
   evidence,
@@ -1647,11 +1741,25 @@ function RelationshipTree({
   }, [rawHypotheses]);
 
   const hasContent =
-    symptoms.length > 0 || hypotheses.length > 0 || evidence.length > 0;
+    signals.length > 0 ||
+    symptoms.length > 0 ||
+    hypotheses.length > 0 ||
+    evidence.length > 0;
 
-  // Node sets used for rendering. If symptoms haven't surfaced yet but
+  // Signal nodes — leftmost column. When signals haven't surfaced yet
+  // but later columns have data, fall back to a single synthetic
+  // "Detected signal" node so the column doesn't appear empty.
+  const signalNodes = useMemo(() => {
+    if (signals.length > 0) return signals.map((s, i) => ({ id: `G${i}`, title: s.title }));
+    if (symptoms.length > 0 || hypotheses.length > 0 || evidence.length > 0) {
+      return [{ id: 'G0', title: signalTitle || 'Detected signal' }];
+    }
+    return [];
+  }, [signals, symptoms, hypotheses, evidence, signalTitle]);
+
+  // Symptom nodes (col 1). If symptoms haven't surfaced yet but
   // hypotheses have, fall back to a single synthetic symptom so the
-  // graph still has a meaningful left column.
+  // graph still has a meaningful middle column.
   const symptomNodes = useMemo(() => {
     if (symptoms.length > 0) return symptoms.map((s, i) => ({ id: `S${i}`, title: s.title }));
     if (hypotheses.length > 0 || evidence.length > 0) {
@@ -1660,7 +1768,17 @@ function RelationshipTree({
     return [];
   }, [symptoms, hypotheses, evidence, signalTitle]);
 
-  // Edges: symptom -> hypothesis (round-robin), hypothesis -> evidence (round-robin).
+  // Edges: signal -> symptom (round-robin), symptom -> hypothesis (round-robin),
+  // hypothesis -> evidence (round-robin).
+  const sigSymEdges = useMemo(() => {
+    const out: { from: string; to: string }[] = [];
+    if (signalNodes.length === 0) return out;
+    symptomNodes.forEach((s, i) => {
+      out.push({ from: signalNodes[i % signalNodes.length].id, to: s.id });
+    });
+    return out;
+  }, [signalNodes, symptomNodes]);
+
   const symHypEdges = useMemo(() => {
     const out: { from: string; to: string }[] = [];
     if (symptomNodes.length === 0) return out;
@@ -1679,8 +1797,14 @@ function RelationshipTree({
     return out;
   }, [hypotheses, evidence]);
 
-  const rows = Math.max(symptomNodes.length, hypotheses.length, evidence.length, 1);
-  const totalW = REL_PAD_X * 2 + REL_COL_W * 3 + REL_COL_GAP * 2;
+  const rows = Math.max(
+    signalNodes.length,
+    symptomNodes.length,
+    hypotheses.length,
+    evidence.length,
+    1,
+  );
+  const totalW = REL_PAD_X * 2 + REL_COL_W * 4 + REL_COL_GAP * 3;
   const totalH =
     REL_PAD_Y * 2 +
     REL_COL_HEADER_H +
@@ -1690,8 +1814,9 @@ function RelationshipTree({
   // Helper: y-center of a node at index `i` in a column.
   const nodeCY = (i: number) =>
     REL_PAD_Y + REL_COL_HEADER_H + i * (REL_NODE_H + REL_NODE_GAP) + REL_NODE_H / 2;
-  const colX = (col: 0 | 1 | 2) => REL_PAD_X + col * (REL_COL_W + REL_COL_GAP);
+  const colX = (col: 0 | 1 | 2 | 3) => REL_PAD_X + col * (REL_COL_W + REL_COL_GAP);
 
+  const sigIdxById = new Map(signalNodes.map((s, i) => [s.id, i]));
   const sympIdxById = new Map(symptomNodes.map((s, i) => [s.id, i]));
   const hypIdxById = new Map(hypotheses.map((h, i) => [h.id, i]));
 
@@ -1730,7 +1855,7 @@ function RelationshipTree({
             marginLeft: 6,
           }}
         >
-          symptom &rarr; hypothesis &rarr; evidence
+          signal &rarr; symptom &rarr; hypothesis &rarr; evidence
         </span>
       </div>
 
@@ -1743,7 +1868,7 @@ function RelationshipTree({
             padding: '12px 0',
           }}
         >
-          Waiting for the agent to surface symptoms, hypotheses, and evidence&hellip;
+          Waiting for the agent to surface signals, symptoms, hypotheses, and evidence&hellip;
         </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
@@ -1760,18 +1885,42 @@ function RelationshipTree({
             </defs>
 
             {/* Column headers */}
-            <RelColHeader x={colX(0)} label="Symptoms"   color="#e67e22" icon={'\uf21e'} />
-            <RelColHeader x={colX(1)} label="Hypotheses" color="#9b59b6" icon={'\uf0eb'} />
-            <RelColHeader x={colX(2)} label="Evidence"   color="#3498db" icon={'\uf0c3'} />
+            <RelColHeader x={colX(0)} label="Signals"    color="#0ea5e9" icon={'\uf0e7'} />
+            <RelColHeader x={colX(1)} label="Symptoms"   color="#e67e22" icon={'\uf21e'} />
+            <RelColHeader x={colX(2)} label="Hypotheses" color="#9b59b6" icon={'\uf0eb'} />
+            <RelColHeader x={colX(3)} label="Evidence"   color="#3498db" icon={'\uf0c3'} />
+
+            {/* Edges: signal -> symptom */}
+            {sigSymEdges.map((e, i) => {
+              const gIdx = sigIdxById.get(e.from);
+              const sIdx = sympIdxById.get(e.to);
+              if (gIdx == null || sIdx == null) return null;
+              const x1 = colX(0) + REL_COL_W;
+              const y1 = nodeCY(gIdx);
+              const x2 = colX(1);
+              const y2 = nodeCY(sIdx);
+              const cx = (x1 + x2) / 2;
+              return (
+                <path
+                  key={`gs-${i}`}
+                  d={`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`}
+                  fill="none"
+                  stroke="#9ed7f0"
+                  strokeWidth={1.4}
+                  opacity={0.75}
+                  markerEnd="url(#rel-arrow)"
+                />
+              );
+            })}
 
             {/* Edges: symptom -> hypothesis */}
             {symHypEdges.map((e, i) => {
               const sIdx = sympIdxById.get(e.from);
               const hIdx = hypIdxById.get(e.to);
               if (sIdx == null || hIdx == null) return null;
-              const x1 = colX(0) + REL_COL_W;
+              const x1 = colX(1) + REL_COL_W;
               const y1 = nodeCY(sIdx);
-              const x2 = colX(1);
+              const x2 = colX(2);
               const y2 = nodeCY(hIdx);
               const cx = (x1 + x2) / 2;
               return (
@@ -1792,9 +1941,9 @@ function RelationshipTree({
               const hIdx = hypIdxById.get(e.from);
               if (hIdx == null) return null;
               const eIdx = parseInt(e.to.slice(1), 10);
-              const x1 = colX(1) + REL_COL_W;
+              const x1 = colX(2) + REL_COL_W;
               const y1 = nodeCY(hIdx);
-              const x2 = colX(2);
+              const x2 = colX(3);
               const y2 = nodeCY(eIdx);
               const cx = (x1 + x2) / 2;
               return (
@@ -1810,51 +1959,79 @@ function RelationshipTree({
               );
             })}
 
-            {/* Symptom nodes */}
+            {/* Signal nodes — numbered, leftmost column. */}
+            {signalNodes.map((g, i) => (
+              <RelNode
+                key={`gn-${g.id}`}
+                x={colX(0)}
+                y={nodeCY(i) - REL_NODE_H / 2}
+                w={REL_COL_W}
+                h={REL_NODE_H}
+                fill="#ecfaff"
+                stroke="#bde6f5"
+                accent="#0ea5e9"
+                title={`${i + 1}. ${g.title}`}
+                subtitle="Signal"
+              />
+            ))}
+
+            {/* Symptom nodes — numbered so the audience can refer to
+                "Symptom 1" / "Symptom 2" during the demo narration. */}
             {symptomNodes.map((s, i) => (
               <RelNode
                 key={`sn-${s.id}`}
-                x={colX(0)}
+                x={colX(1)}
                 y={nodeCY(i) - REL_NODE_H / 2}
                 w={REL_COL_W}
                 h={REL_NODE_H}
                 fill="#fff7ed"
                 stroke="#fdd9b5"
                 accent="#e67e22"
-                title={s.title}
+                title={`${i + 1}. ${s.title}`}
                 subtitle="Symptom"
               />
             ))}
 
-            {/* Hypothesis nodes */}
-            {hypotheses.map((h, i) => (
-              <RelNode
-                key={`hn-${h.id}-${i}`}
-                x={colX(1)}
-                y={nodeCY(i) - REL_NODE_H / 2}
-                w={REL_COL_W}
-                h={REL_NODE_H}
-                fill="#f6f1ff"
-                stroke="#d9c5fb"
-                accent={h.badgeColor}
-                badge={h.id}
-                title={h.description}
-                subtitle={`${h.score}% confidence`}
-              />
-            ))}
+            {/* Hypothesis nodes — id badge intentionally omitted (the
+                graph reads cleaner without raw IDs); the description is
+                the hypothesis statement and the subtitle now communicates
+                supported/refuted with an explicit color. */}
+            {hypotheses.map((h, i) => {
+              const verdict =
+                h.status === 'supported'
+                  ? { label: `${h.score}% supported`, color: '#16a34a' }
+                  : h.status === 'refuted'
+                    ? { label: `${h.score}% refuted`, color: '#dc2626' }
+                    : { label: `${h.score}% confidence`, color: '#666' };
+              return (
+                <RelNode
+                  key={`hn-${h.id}-${i}`}
+                  x={colX(2)}
+                  y={nodeCY(i) - REL_NODE_H / 2}
+                  w={REL_COL_W}
+                  h={REL_NODE_H}
+                  fill="#f6f1ff"
+                  stroke="#d9c5fb"
+                  accent={h.badgeColor}
+                  title={h.description || `Hypothesis ${i + 1}`}
+                  subtitle={verdict.label}
+                  subtitleColor={verdict.color}
+                />
+              );
+            })}
 
             {/* Evidence nodes */}
             {evidence.map((e, i) => (
               <RelNode
                 key={`en-${i}`}
-                x={colX(2)}
+                x={colX(3)}
                 y={nodeCY(i) - REL_NODE_H / 2}
                 w={REL_COL_W}
                 h={REL_NODE_H}
                 fill="#eaf3ff"
                 stroke="#c9defc"
                 accent="#3498db"
-                title={e.label}
+                title={labelForAgent(e.label)}
                 subtitle="Tool / Evidence"
               />
             ))}
@@ -1893,9 +2070,10 @@ interface RelNodeProps {
   accent: string;
   title: string;
   subtitle?: string;
+  subtitleColor?: string;
   badge?: string;
 }
-function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, badge }: RelNodeProps) {
+function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, subtitleColor, badge }: RelNodeProps) {
   // Truncate the title to fit within the node width.
   const maxChars = badge ? 26 : 32;
   const display = title.length > maxChars ? title.slice(0, maxChars - 1) + '\u2026' : title;
@@ -1949,7 +2127,7 @@ function RelNode({ x, y, w, h, fill, stroke, accent, title, subtitle, badge }: R
         </text>
       )}
       {subtitle && (
-        <text x={x + 12} y={y + h - 12} fontSize={10} fill="#666">
+        <text x={x + 12} y={y + h - 12} fontSize={10} fontWeight={subtitleColor ? 700 : 400} fill={subtitleColor ?? '#666'}>
           {subtitle}
         </text>
       )}
@@ -2736,8 +2914,12 @@ function AgentRing({
           {/* Single ephemeral line: previous speaker → current speaker.
               No permanent cross-talk web; the line moves with the
               conversation so the audience always sees "who handed off
-              to whom" in this very moment. */}
+              to whom" in this very moment. Hidden once the
+              investigation is complete — there are no more handoffs to
+              illustrate, and a lingering arrow looks like the system
+              is still working. */}
           {(() => {
+            if (complete) return null;
             if (!currentSpeaker || !previousSpeaker) return null;
             const a = positions.find((p) => p.agent === previousSpeaker);
             const b = positions.find((p) => p.agent === currentSpeaker);
