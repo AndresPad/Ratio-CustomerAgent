@@ -29,7 +29,10 @@ const NAV: readonly NavItem[] = [
   { section: 'INVESTIGATION VIEWS' },
   { to: 'live',                       icon: 'fa-satellite-dish',  label: 'Live Orchestration' },
   { to: 'theatre',                    icon: 'fa-theater-masks',   label: 'Investigation Theatre' },
-  { to: 'neural-canvas',      icon: 'fa-circle-nodes',    label: 'Neural Canvas' },
+  // Neural Canvas (live) — temporarily hidden for the demo recording.
+  // Restore by removing the comment when we want it back in the menu.
+  // The route /customer-agent/neural-canvas remains accessible by URL.
+  // { to: 'neural-canvas',      icon: 'fa-circle-nodes',    label: 'Neural Canvas' },
   { to: 'neural-canvas-demo', icon: 'fa-circle-nodes',    label: 'Neural Canvas' },
   { section: 'INVESTIGATIONS' },
   { to: 'active',    icon: 'fa-play-circle', label: 'Active Investigation' },

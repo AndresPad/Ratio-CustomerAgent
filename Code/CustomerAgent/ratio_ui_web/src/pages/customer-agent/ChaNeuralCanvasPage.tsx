@@ -68,6 +68,10 @@ interface ServiceProgress {
   narration: string;
   running: boolean;
   complete: boolean;
+  /** True only after the chat has actually surfaced the signal
+   *  (drives both the in-panel title chip and the top-tab reveal so
+   *  they animate in together). */
+  signalDetected: boolean;
 }
 
 export default function ChaNeuralCanvasPage() {
@@ -98,7 +102,8 @@ export default function ChaNeuralCanvasPage() {
         old.stage === prog.stage &&
         old.running === prog.running &&
         old.complete === prog.complete &&
-        old.narration === prog.narration
+        old.narration === prog.narration &&
+        old.signalDetected === prog.signalDetected
       ) {
         return prev;
       }
@@ -113,6 +118,21 @@ export default function ChaNeuralCanvasPage() {
   const handleReloadAll = useCallback(() => {
     setReloadNonce((n) => n + 1);
   }, []);
+
+  // Staggered service reveal: start with just the first impacted
+  // service so the demo reads as the agents *discovering* one issue
+  // at a time. Each subsequent service is mounted only once the
+  // previous one has surfaced its signal in chat (signalDetected).
+  // Hidden services intentionally don't mount their ServicePanel —
+  // their replay flow never runs, so their top-tab progress bar
+  // can't pre-fill to 100% before the user has seen the agents work
+  // through them.
+  const [visibleServiceCount, setVisibleServiceCount] = useState(1);
+  useEffect(() => {
+    // Reset the stagger whenever the service list changes or a full
+    // reload is requested.
+    setVisibleServiceCount(1);
+  }, [serviceOptions, reloadNonce]);
 
   // Periodically refresh the service list. In mock mode we skip the
   // network call entirely and use the canonical mock service list
@@ -168,6 +188,29 @@ export default function ChaNeuralCanvasPage() {
       : null;
     setActiveServiceId((match ?? serviceOptions[0]).service_tree_id);
   }, [serviceOptions, activeServiceId, paramXcv]);
+
+  // Reveal the next staggered service shortly after the most recently
+  // revealed one has surfaced its signal in chat. Adds a small visible
+  // gap between the cascading discoveries so the demo reads as the
+  // agents finding one issue, then another.
+  useEffect(() => {
+    if (visibleServiceCount >= serviceOptions.length) return;
+    const lastVisible = serviceOptions[visibleServiceCount - 1];
+    if (!lastVisible) return;
+    const lastProg = progressMap[lastVisible.service_tree_id];
+    if (!lastProg?.signalDetected) return;
+    const t = window.setTimeout(() => {
+      setVisibleServiceCount((n) =>
+        Math.min(n + 1, serviceOptions.length),
+      );
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [progressMap, serviceOptions, visibleServiceCount]);
+
+  const visibleServices = useMemo(
+    () => serviceOptions.slice(0, visibleServiceCount),
+    [serviceOptions, visibleServiceCount],
+  );
 
   return (
     <div
@@ -243,47 +286,51 @@ export default function ChaNeuralCanvasPage() {
           color: #ffffff !important;
         }
       `}</style>
-      {/* Top toolbar: services status */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '4px 20px 0',
-          fontSize: 11,
-        }}
-      >
-        <span style={{ flex: 1 }} />
+      {/* Top toolbar: services status. Hidden until the chat-driven
+          signal-detection has flipped for at least one service, so the
+          "N services \u00b7 polled every Ns" line lands in lockstep
+          with the top tabs and the title chip. */}
+      {Object.values(progressMap).some((p) => p.signalDetected) && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 20px 0',
+            fontSize: 11,
+          }}
+        >
+          <span style={{ flex: 1 }} />
 
-        <span style={{ fontSize: 10, color: '#999' }}>
-          {servicesLoading
-            ? 'Refreshing services\u2026'
-            : serviceOptions.length > 0
-              ? `${serviceOptions.length} service${serviceOptions.length === 1 ? '' : 's'} \u00b7 polled every ${SERVICE_REFRESH_MS / 1000}s`
-              : 'No services discovered yet'}
-        </span>
-
-        {servicesError && (
-          <span
-            style={{ fontSize: 10, color: '#e53935', marginLeft: 8 }}
-            title={servicesError}
-          >
-            <i className="fas fa-triangle-exclamation" /> services lookup failed
+          <span style={{ fontSize: 10, color: '#999' }}>
+            {servicesLoading
+              ? 'Refreshing services\u2026'
+              : serviceOptions.length > 0
+                ? `${serviceOptions.length} service${serviceOptions.length === 1 ? '' : 's'} \u00b7 polled every ${SERVICE_REFRESH_MS / 1000}s`
+                : 'No services discovered yet'}
           </span>
-        )}
-      </div>
+
+          {servicesError && (
+            <span
+              style={{ fontSize: 10, color: '#e53935', marginLeft: 8 }}
+              title={servicesError}
+            >
+              <i className="fas fa-triangle-exclamation" /> services lookup failed
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Themed content region. Everything inside .cha-v4-themed is
           subject to the light-theme filter when data-cha-theme="light". */}
       <div className="cha-v4-themed">
-        {/* Service tab bar — hidden until the initial SLI Collector
-            (signal) stage has FINISHED for at least one service, i.e.
-            the investigation has progressed past 'signal' into 'symptom'
-            or beyond. This keeps the SQL / AKS / VM tabs from appearing
-            while the SLI collector is still thinking. */}
-        {Object.values(progressMap).some((p) => p.reachedCount >= 2) && (
+        {/* Service tab bar \u2014 the per-tab placeholder handles the
+            "Investigating\u2026" state, so we render the bar as soon
+            as any service has progress (the placeholder cards keep it
+            generic until the chat reveal surfaces the signal). */}
+        {Object.keys(progressMap).length > 0 && (
           <ServiceTabs
-            services={serviceOptions}
+            services={visibleServices}
             activeId={activeServiceId}
             progressMap={progressMap}
             onSelect={setActiveServiceId}
@@ -306,7 +353,7 @@ export default function ChaNeuralCanvasPage() {
               : 'No impacted services in the current window.'}
           </div>
         )}
-        {serviceOptions.map((svc) => (
+        {visibleServices.map((svc) => (
           <ServicePanel
             key={svc.service_tree_id}
             service={svc}
@@ -356,6 +403,71 @@ function ServiceTabs({ services, activeId, progressMap, onSelect }: ServiceTabsP
             ? stageColor
             : '#bdbdbd';
         const stageLabel = prog ? STAGE_DISPLAY[prog.stage] : 'Idle';
+        // Until the chat reveal has actually surfaced the signal, show
+        // a neutral "Investigating\u2026" placeholder so the tab flips
+        // to the real service name in lockstep with the title chip.
+        const detected = prog?.signalDetected ?? false;
+        if (!detected) {
+          return (
+            <button
+              key={svc.service_tree_id}
+              onClick={() => onSelect(svc.service_tree_id)}
+              style={tabBtnStyle(active)}
+              title="Investigating\u2026"
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginBottom: 4,
+                }}
+              >
+                <i
+                  className="fas fa-search"
+                  style={{
+                    color: '#7d92ad',
+                    animation: 'cha-pulse 1.4s ease-in-out infinite',
+                  }}
+                />
+                <span style={{ fontWeight: 600, color: '#7d92ad' }}>
+                  Investigating&hellip;
+                </span>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 10,
+                }}
+              >
+                <div
+                  style={{
+                    flex: 1,
+                    height: 4,
+                    borderRadius: 2,
+                    background:
+                      'linear-gradient(90deg, #eceff1 0%, #cfd8dc 50%, #eceff1 100%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'cha-shimmer 1.6s linear infinite',
+                    minWidth: 90,
+                  }}
+                />
+                <span
+                  style={{
+                    color: '#999',
+                    fontSize: 10,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  Discovering
+                </span>
+              </div>
+            </button>
+          );
+        }
         return (
           <button
             key={svc.service_tree_id}
@@ -471,6 +583,10 @@ function ServiceTabs({ services, activeId, progressMap, onSelect }: ServiceTabsP
           0%, 60%, 100% { transform: translateY(0);   opacity: .35; }
           30%           { transform: translateY(-3px); opacity: 1;  }
         }
+        @keyframes cha-shimmer {
+          0%   { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
       `}</style>
     </div>
   );
@@ -522,6 +638,11 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
   const [teamsChannel, setTeamsChannel] = useState<TeamsChannelInfo | null>(null);
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [emailSubscriberCount, setEmailSubscriberCount] = useState<number>(0);
+  // Mirrors `signalDetected` from ConversationHero: only true once the
+  // throttled chat reveal has actually surfaced the signal-stage turns.
+  // Bubbled up to the parent so the top tab flips at the same moment
+  // the in-panel title chip flips.
+  const [signalDetected, setSignalDetected] = useState(false);
   const lastResolvedNotifiedXcv = useRef('');
 
   // Auto-start a fresh replay whenever the service's XCV changes (the
@@ -553,28 +674,27 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
     if (!service.xcv) return;
     if (lastTeamsXcv.current === service.xcv) return;
     lastTeamsXcv.current = service.xcv;
-    setTeamsChannel(null);
-    setTeamsLoading(true);
     setEmailSubscriberCount(0);
     lastResolvedNotifiedXcv.current = '';
 
     if (mode === 'mock') {
-      // Brief delay so the loading -> ready transition still reads as
-      // a real handshake on screen.
-      const t = window.setTimeout(() => {
-        setTeamsChannel({
-          enabled: true,
-          xcv: service.xcv,
-          channel_id: `mock-channel-${service.service_tree_id}`,
-          web_url: '#',
-          display_name: `${service.service_name} — Investigation`,
-          created: false,
-          message: 'Mock Teams channel',
-        });
-        setTeamsLoading(false);
-      }, 800);
-      return () => window.clearTimeout(t);
+      // Demo: render the "Join Teams channel" affordance immediately
+      // (no fake loading handshake, no spinner).
+      setTeamsChannel({
+        enabled: true,
+        xcv: service.xcv,
+        channel_id: `mock-channel-${service.service_tree_id}`,
+        web_url: '#',
+        display_name: `${service.service_name} \u2014 Investigation`,
+        created: false,
+        message: 'Mock Teams channel',
+      });
+      setTeamsLoading(false);
+      return;
     }
+
+    setTeamsChannel(null);
+    setTeamsLoading(true);
 
     ensureTeamsChannel({
       xcv: service.xcv,
@@ -684,12 +804,12 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
     return '';
   }, [traceLines, visibleCount]);
 
-  // ── Narrator-paced reveal cursor ────────────────────────────────
+  // \u2500\u2500 Narrator-paced reveal cursor \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   // The chat panel inside ConversationHero throttles its own reveal at
-  // ~1.5s per LLM bubble. The relationship tree (Signal → Symptom →
-  // Hypothesis → Evidence) used to render directly off `live.symptoms`
+  // ~1.5s per LLM bubble. The relationship tree (Signal \u2192 Symptom \u2192
+  // Hypothesis \u2192 Evidence) used to render directly off `live.symptoms`
   // / `live.hypotheses`, which are populated by the mock replay timeline
-  // *much* faster than the narrator can talk through them — so the tree
+  // *much* faster than the narrator can talk through them \u2014 so the tree
   // would race ahead of the chat. We replicate the same throttle here
   // and derive `narratedStageIdx` (the highest INVESTIGATION_STAGES
   // index the narrator has actually mentioned), then gate each column of
@@ -727,23 +847,41 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
 
   // Push compact progress to the parent so the tab bar can render a
   // live fill per service and the operator can compare side-by-side.
+  // We deliberately count only stages that have surfaced in the
+  // *throttled* trace reveal (visibleCount), not the raw replay
+  // `reached` set -- otherwise tabs jump to 100% before the user has
+  // seen the agents work through every stage in chat. This keeps the
+  // top-tab progress bar in lockstep with the per-service "Resolved"
+  // badge.
+  const revealedReachedCount = useMemo(() => {
+    const upTo = Math.min(visibleCount, traceLines.length);
+    const seen = new Set<InvestigationStage>();
+    for (let i = 0; i < upTo; i++) {
+      const s = traceLines[i]?.stage;
+      if (s) seen.add(s);
+    }
+    return seen.size;
+  }, [traceLines, visibleCount]);
+
   useEffect(() => {
     onProgress(service.service_tree_id, {
-      reachedCount: reached.length,
+      reachedCount: revealedReachedCount,
       totalStages: INVESTIGATION_STAGES.length,
       stage: active,
       narration: latestNarration,
       running,
       complete,
+      signalDetected,
     });
   }, [
     onProgress,
     service.service_tree_id,
-    reached.length,
+    revealedReachedCount,
     active,
     latestNarration,
     running,
     complete,
+    signalDetected,
   ]);
 
   // Fire the "investigation resolved" email exactly once per XCV when
@@ -806,6 +944,7 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         traceLines={traceLines}
         visibleCount={visibleCount}
         sandboxRuns={live.sandboxRuns}
+        onSignalDetected={setSignalDetected}
       />
 
       {/* Control bar: service info + reload */}
@@ -814,7 +953,7 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
           style={{
             fontSize: 12,
             fontWeight: 600,
-            color: '#00bfa5',
+            color: '#4b53bc',
             display: 'flex',
             alignItems: 'center',
             gap: 6,
@@ -953,7 +1092,7 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         </div>
       </details>
 
-      {/* Relationship tree — Signal → Symptom → Hypothesis → Evidence.
+      {/* Relationship tree \u2014 Signal \u2192 Symptom \u2192 Hypothesis \u2192 Evidence.
           Each column is gated on `narratedStageIdx` so the tree fills
           in lock-step with the narrator: a column only appears once the
           chat has actually talked through that stage. */}
@@ -980,6 +1119,11 @@ interface ConversationHeroProps {
   traceLines: TraceLine[];
   visibleCount: number;
   sandboxRuns: SandboxRun[];
+  /** Called whenever the chat-driven "the agents have surfaced the
+   *  signal" state flips, so the parent can flip the top tab from
+   *  "Investigating…" to the real service name in lockstep with the
+   *  in-panel title chip. */
+  onSignalDetected?: (detected: boolean) => void;
 }
 
 /** Agent display metadata: label, role description, color seed, icon. */
@@ -1124,6 +1268,7 @@ function ConversationHero({
   traceLines,
   visibleCount,
   sandboxRuns,
+  onSignalDetected,
 }: ConversationHeroProps) {
   // Lines that have been "spoken" so far (drives both the chat and which
   // agents on the ring have already participated).
@@ -1171,6 +1316,32 @@ function ConversationHero({
     () => chat.slice(0, Math.min(revealedCount, chat.length)),
     [chat, revealedCount],
   );
+
+  // Reveal the real signal title only after the agents have actually
+  // surfaced the issue *in the chat*. The throttled chat reveal is our
+  // single source of truth for "the audience has seen this happen" --
+  // the underlying replay state (`reached`) advances much faster than
+  // bubbles get typed out, which is why earlier attempts felt
+  // instantaneous. We wait until two signal-stage turns have appeared:
+  // the SLI collector's "pulling telemetry" turn, then the triage
+  // agent's "I see a compound signal" turn. By that point it reads as
+  // the agents discovering the problem instead of being told up front.
+  const signalDetected = useMemo(() => {
+    let signalTurns = 0;
+    for (const t of revealedChat) {
+      if (t.stage === 'signal') signalTurns++;
+      // Anything past the signal stage definitely qualifies.
+      if (t.stage !== 'signal') return true;
+      if (signalTurns >= 2) return true;
+    }
+    return false;
+  }, [revealedChat]);
+
+  // Notify the parent so the top tab can flip from "Investigating…"
+  // to the real service name in lockstep with the chip below.
+  useEffect(() => {
+    onSignalDetected?.(signalDetected);
+  }, [signalDetected, onSignalDetected]);
 
   // Real Action Plan agent utterances (LLM responses where AgentName ===
   // 'action_plan_agent'). These are shown in a separate collapsible
@@ -1386,15 +1557,34 @@ function ConversationHero({
             border: '1px solid #1a2a44',
             padding: '3px 10px',
             borderRadius: 999,
-            color: '#9fb1c7',
+            color: signalDetected ? '#9fb1c7' : '#7d92ad',
             textTransform: 'none',
             letterSpacing: 0,
             fontWeight: 500,
+            transition: 'color .35s ease, background .35s ease',
           }}
-          title={signalTitle}
+          title={signalDetected ? signalTitle : 'Investigating\u2026'}
         >
-          <i className="fas fa-bolt" style={{ marginRight: 6, color: '#ffd93d' }} />
-          {truncate(signalTitle || 'Investigation', 80)}
+          <i
+            className={signalDetected ? 'fas fa-bolt' : 'fas fa-search'}
+            style={{
+              marginRight: 6,
+              color: signalDetected ? '#ffd93d' : '#7d92ad',
+              animation: signalDetected
+                ? 'none'
+                : 'cha-pulse 1.6s ease-in-out infinite',
+            }}
+          />
+          {/* Crossfade text on detection so the chip transition reads
+              naturally instead of popping. */}
+          <span
+            key={signalDetected ? 'detected' : 'investigating'}
+            style={{ animation: 'cha-narration-fade .45s ease both' }}
+          >
+            {signalDetected
+              ? truncate(signalTitle || 'Investigation', 80)
+              : 'Investigating\u2026'}
+          </span>
         </span>
       </div>
 
@@ -2206,13 +2396,29 @@ function TeamsChannelButton({
   info: TeamsChannelInfo | null;
   loading: boolean;
 }) {
+  // While the backend is still provisioning the channel, show the same
+  // "Join Teams channel" affordance (in Teams brand purple) so the
+  // button reads naturally from the very first render -- no spinner,
+  // no flicker. The click is suppressed until `info.web_url` lands.
   if (loading && !info) {
     return (
       <button
-        style={{ ...S.loadBtn, background: '#eee', color: '#555', cursor: 'wait' } as CSSProperties}
+        style={
+          {
+            ...S.loadBtn,
+            background: '#6264A7',
+            color: '#fff',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            cursor: 'wait',
+          } as CSSProperties
+        }
+        title="Provisioning Teams channel\u2026"
+        onClick={(e) => e.preventDefault()}
         disabled
       >
-        <i className="fas fa-spinner fa-spin" /> Teams{'\u2026'}
+        <i className="fas fa-users" /> Join Teams channel
       </button>
     );
   }
@@ -2225,7 +2431,7 @@ function TeamsChannelButton({
         style={
           {
             ...S.loadBtn,
-            background: '#4b53bc',
+            background: '#6264A7',
             color: '#fff',
             textDecoration: 'none',
             display: 'inline-flex',
@@ -2248,7 +2454,7 @@ function TeamsChannelButton({
       style={
         {
           ...S.loadBtn,
-          background: '#1f9b6e',
+          background: '#6264A7',
           color: '#fff',
           display: 'inline-flex',
           alignItems: 'center',

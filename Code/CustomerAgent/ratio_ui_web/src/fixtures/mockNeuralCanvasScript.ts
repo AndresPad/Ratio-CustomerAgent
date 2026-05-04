@@ -42,6 +42,30 @@ export interface MockServiceScript {
 const HYP_BLUE = '#3498db';   // HYP-SLI
 const HYP_RED = '#e74c3c';    // HYP-DEP
 
+/** Customer name used across all mock scripts. Mirrors `DEFAULT_CUSTOMER`
+ *  in `ChaNeuralCanvasPage.tsx` so the chat copy reads identically. */
+const MOCK_CUSTOMER = 'BlackRock, Inc';
+
+/** Build the SLI Collector's opening line in the same shape the live
+ *  agent uses, e.g.,
+ *    "I've begun investigating issues for BlackRock, Inc. on the
+ *     SQL service. I found 2 activated signals, both related to ...
+ *     Next, I'll analyze these signals to identify potential symptoms."
+ *  Customer + service are interpolated so we don't hard-code copy
+ *  per service. `signalsClause` carries the service-specific detail
+ *  (or `null` for the progress-shell services). */
+function buildSliCollectorOpener(
+  serviceName: string,
+  signalCount: number | null,
+  signalsClause: string | null,
+): string {
+  const lead = `I've begun investigating issues for ${MOCK_CUSTOMER} on the ${serviceName} service.`;
+  if (signalCount == null || signalsClause == null) {
+    return `${lead} I did not find any activated signals — the service is currently operating within bounds. Next, I'll confirm by sweeping telemetry.`;
+  }
+  return `${lead} I found ${signalCount} activated signal${signalCount === 1 ? '' : 's'}, ${signalsClause}. Next, I'll analyze these signals to identify potential symptoms.`;
+}
+
 /* ── Helpers ── */
 
 function tl(
@@ -155,7 +179,7 @@ print(f"Sustained pegged DTU windows: {pegged}")
     confidence: 85,
     summary: 'Investigated 3 symptoms → 2 hypotheses → 7 evidence items → 3 actions',
   },
-  totalDurationMs: 30_000,
+  totalDurationMs: 32_700,
   stageTimeline: [
     { stage: 'signal',     atMs: 0 },
     { stage: 'symptom',    atMs: 4_000 },
@@ -167,7 +191,11 @@ print(f"Sustained pegged DTU windows: {pegged}")
     { stage: 'action_plan',atMs: 28_500 },
   ],
   traceLines: [
-    tl(    400, 'signal',     'narrator',                   'AHE detected a SQL Database SLI breach for BlackRock in West US.'),
+    tl(    400, 'signal',     'sli_collector',              buildSliCollectorOpener(
+                                                              'SQL',
+                                                              2,
+                                                              "one is a severe SLI degradation in West US, the other is correlated regional latency on the same service",
+                                                            )),
     tl(  1_400, 'signal',     'triage_agent',               'Compound signal: SLI breach + correlated regional latency in West US — pushing past investigation threshold.'),
     tl(  2_400, 'signal',     'investigation_orchestrator', 'Investigation triggered. Routing to evidence planning.'),
     tl(  4_400, 'symptom',    'triage_agent',               'Symptom 1: SLI impact detected across West US and Central India.'),
@@ -188,9 +216,11 @@ print(f"Sustained pegged DTU windows: {pegged}")
     tl( 24_600, 'reasoning',  'python_runner',              'Sandbox Run 2 complete — DTU t-stat -0.31, p=0.75. No sustained pegged DTU windows.', { tool: 'execute_python_in_sandbox_tool' }),
     tl( 26_000, 'reasoning',  'reasoner',                   'Capacity exhaustion is not supported — refuting HYP-SLI-003 at 25% confidence.'),
     tl( 27_700, 'result',     'reasoner',                   'Investigation complete. Root cause: localized SQL service issue. HYP-SLI-006 confirmed at 85% confidence; HYP-SLI-003 refuted at 25%.'),
-    tl( 28_700, 'action_plan','action_planner',             'Action 1: Create an IcM ticket for the SQL West US service team.'),
-    tl( 29_100, 'action_plan','action_planner',             'Action 2: Schedule a follow-up monitoring check in 30 minutes.'),
-    tl( 29_600, 'action_plan','action_planner',             'Action 3: Notify the AED team via email with the investigation summary.'),
+    tl( 28_500, 'action_plan','investigation_orchestrator', 'The investigation has been resolved, and the system will now transition to action planning automatically. Thank you for your collaboration!'),
+    tl( 29_500, 'action_plan','action_planner',             'Action 1: Create an IcM ticket for the SQL West US service team.'),
+    tl( 30_000, 'action_plan','action_planner',             'Action 2: Schedule a follow-up monitoring check in 30 minutes.'),
+    tl( 30_500, 'action_plan','action_planner',             'Action 3: Notify the AED team via email with the investigation summary.'),
+    tl( 31_700, 'result',     'reasoner',                   `I've finalized the recommended actions to address the confirmed hypothesis for ${MOCK_CUSTOMER}. The investigation determined that the service issue was localized to a small West US cluster, with SLI degradation confirmed but no evidence of broader platform or capacity failures. I've recommended creating an IcM ticket for the SQL West US service team, scheduling a follow-up monitoring check, and notifying the AED team via email. With these actions planned, the investigation is now complete.`),
   ],
 };
 
@@ -232,7 +262,7 @@ const AKS_SCRIPT: MockServiceScript = {
     confidence: 78,
     summary: 'Investigated 3 symptoms → 2 hypotheses → 5 evidence items → 2 actions',
   },
-  totalDurationMs: 26_000,
+  totalDurationMs: 28_700,
   stageTimeline: [
     { stage: 'signal',     atMs: 0 },
     { stage: 'symptom',    atMs: 3_200 },
@@ -241,10 +271,14 @@ const AKS_SCRIPT: MockServiceScript = {
     { stage: 'scoring',    atMs: 17_000 },
     { stage: 'reasoning',  atMs: 19_500 },
     { stage: 'result',     atMs: 23_500 },
-    { stage: 'action_plan',atMs: 24_800 },
+    { stage: 'action_plan',atMs: 24_400 },
   ],
   traceLines: [
-    tl(    600, 'signal',     'narrator',                   'AHE detected pod restart storm on BlackRock AKS cluster in East US 2.'),
+    tl(    600, 'signal',     'sli_collector',              buildSliCollectorOpener(
+                                                              'Azure Kubernetes Service',
+                                                              3,
+                                                              "a pod restart storm, agent-pool CPU saturation, and an internal load-balancer latency spike",
+                                                            )),
     tl(  1_600, 'signal',     'triage_agent',               'Compound signal — pod restarts + CPU saturation + LB latency above baseline.'),
     tl(  2_400, 'signal',     'investigation_orchestrator', 'Investigation triggered.'),
     tl(  3_300, 'symptom',    'triage_agent',               'Symptom 1: Pod restart storm.'),
@@ -260,8 +294,10 @@ const AKS_SCRIPT: MockServiceScript = {
     tl( 19_700, 'reasoning',  'reasoner',                   'Pod density spiked at deploy timestamp on agentpool-02 — supports HYP-DEP-014.'),
     tl( 21_300, 'reasoning',  'reasoner',                   'VM SKU baseline metrics nominal across the pool — refutes HYP-DEP-021.'),
     tl( 23_700, 'result',     'reasoner',                   'Root cause: bad deploy. HYP-DEP-014 confirmed at 78%; HYP-DEP-021 refuted at 22%.'),
-    tl( 25_000, 'action_plan','action_planner',             'Action 1: Roll back the offending deploy.'),
-    tl( 25_500, 'action_plan','action_planner',             'Action 2: Schedule a follow-up health check in 15 minutes.'),
+    tl( 24_500, 'action_plan','investigation_orchestrator', 'The investigation has been resolved, and the system will now transition to action planning automatically. Thank you for your collaboration!'),
+    tl( 25_700, 'action_plan','action_planner',             'Action 1: Roll back the offending deploy.'),
+    tl( 26_300, 'action_plan','action_planner',             'Action 2: Schedule a follow-up health check in 15 minutes.'),
+    tl( 27_700, 'result',     'reasoner',                   `I've finalized the recommended actions to address the confirmed hypothesis for ${MOCK_CUSTOMER}. The investigation determined that the AKS pool degradation was caused by a recent deploy that over-scheduled agentpool-02 — pod density spiked at the deploy timestamp while VM SKU baseline metrics stayed nominal across the rest of the pool. I've recommended rolling back the offending deploy and scheduling a follow-up health check. With these actions planned, the investigation is now complete.`),
   ],
 };
 
@@ -283,7 +319,7 @@ const VM_SCRIPT: MockServiceScript = {
     confidence: 100,
     summary: 'Investigation cleared all gates.',
   },
-  totalDurationMs: 22_000,
+  totalDurationMs: 22_200,
   stageTimeline: [
     { stage: 'signal',     atMs: 0 },
     { stage: 'symptom',    atMs: 3_000 },
@@ -295,7 +331,7 @@ const VM_SCRIPT: MockServiceScript = {
     { stage: 'action_plan',atMs: 21_000 },
   ],
   traceLines: [
-    tl(    400, 'signal',     'narrator',                   'Running scheduled health check for Virtual Machines.'),
+    tl(    400, 'signal',     'sli_collector',              buildSliCollectorOpener('Virtual Machines', null, null)),
     tl(  3_200, 'symptom',    'triage_agent',               'No symptoms detected — VM provisioning latency, allocation success rate within SLO.'),
     tl(  6_700, 'hypothesis', 'reasoner',                   'No active hypotheses — service is operating nominally.'),
     tl( 10_200, 'evidence',   'evidence_planner',           'Evidence sweep complete — no anomalies.'),
@@ -324,7 +360,7 @@ const OPENAI_SCRIPT: MockServiceScript = {
     confidence: 100,
     summary: 'Investigation cleared all gates.',
   },
-  totalDurationMs: 24_000,
+  totalDurationMs: 23_700,
   stageTimeline: [
     { stage: 'signal',     atMs: 0 },
     { stage: 'symptom',    atMs: 3_500 },
@@ -336,7 +372,7 @@ const OPENAI_SCRIPT: MockServiceScript = {
     { stage: 'action_plan',atMs: 22_500 },
   ],
   traceLines: [
-    tl(    400, 'signal',     'narrator',                   'Running scheduled health check for Azure OpenAI.'),
+    tl(    400, 'signal',     'sli_collector',              buildSliCollectorOpener('Azure OpenAI', null, null)),
     tl(  3_700, 'symptom',    'triage_agent',               'No symptoms detected — request rate, error rate, P99 latency within SLO.'),
     tl(  7_200, 'hypothesis', 'reasoner',                   'No active hypotheses — service is operating nominally.'),
     tl( 11_200, 'evidence',   'evidence_planner',           'Evidence sweep complete — no anomalies.'),
