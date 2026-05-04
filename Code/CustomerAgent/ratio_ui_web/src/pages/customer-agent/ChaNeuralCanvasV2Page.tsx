@@ -283,8 +283,12 @@ const TRACE: TraceLine[] = [
   { text: '✗ Inter-service network latency normal', indent: true, type: 'fail', stage: 'evidence' },
   { text: '→ H3 confidence updated: 0.25 → 0.08', indent: true, type: 'result', stage: 'evidence' },
   { text: 'Confidence scoring complete. Winner: H1 (0.92)', type: 'highlight', stage: 'scoring' },
-  { text: 'Root cause: Missing index after migration #4821', type: 'result', stage: 'reasoning' },
-  { text: 'Recommended fix: CREATE INDEX CONCURRENTLY …', type: 'success', stage: 'reasoning' },
+  { text: 'Synthesising root-cause explanation across hypotheses…', type: 'highlight', stage: 'reasoning' },
+  { text: 'Bayesian update: H1 prior 0.40 → posterior 0.92 (3 supporting signals)', indent: true, type: 'normal', stage: 'reasoning' },
+  { text: 'H2 refuted (0.35 → 0.15) — heap + OOM evidence both negative', indent: true, type: 'fail', stage: 'reasoning' },
+  { text: 'H3 refuted (0.25 → 0.08) — upstreams healthy, network nominal', indent: true, type: 'fail', stage: 'reasoning' },
+  { text: 'Confidence threshold met (≥ 0.85). Reasoning complete.', type: 'success', stage: 'reasoning' },
+  { text: 'Root cause: Missing index after migration #4821', type: 'result', stage: 'result' },
 ];
 
 const CONFIDENCE: ConfidenceScore[] = [

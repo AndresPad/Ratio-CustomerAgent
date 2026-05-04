@@ -1446,9 +1446,12 @@ function ConversationHero({
           {/* Action plan strip — collapsed by default; opens to show
               what the dedicated Action Plan agent produced AFTER
               reasoning. Hidden entirely until the investigation is
-              fully complete so it never appears alongside in-flight
+              fully complete AND the chat has finished revealing every
+              reasoning bubble, so it never appears alongside in-flight
               reasoning. */}
-          {complete && <ActionPlanStrip items={actionPlanItems} />}
+          {complete && revealedCount >= chat.length && chat.length > 0 && (
+            <ActionPlanStrip items={actionPlanItems} />
+          )}
 
           {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
               + sandbox_execution_complete events. Auto-shows while a run is

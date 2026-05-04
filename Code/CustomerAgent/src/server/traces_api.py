@@ -192,11 +192,12 @@ async def _query_trace(xcv: str, agent: str | None = None) -> list[dict[str, Any
     flattened rows."""
     workspace_id = os.getenv("LOG_ANALYTICS_WORKSPACE_ID", "").strip()
     if not workspace_id:
-        raise HTTPException(
-            503,
-            "LOG_ANALYTICS_WORKSPACE_ID is not configured. Set the Log Analytics "
-            "workspace GUID in .env to enable replay.",
+        # Return empty trace list if Log Analytics is not configured (dev mode)
+        logger.warning(
+            "LOG_ANALYTICS_WORKSPACE_ID is not configured. Traces replay is disabled. "
+            "Set the Log Analytics workspace GUID in .env to enable replay."
         )
+        return []
     lookback_days = int(os.getenv("LOG_ANALYTICS_LOOKBACK_DAYS", "7") or "7")
 
     # Lazy import check — surface a clear error if deps are missing.
@@ -224,30 +225,35 @@ async def _query_trace(xcv: str, agent: str | None = None) -> list[dict[str, Any
         # Reuse the cached credential + client so the SDK's internal token
         # cache handles refresh — no more interactive browser prompts on
         # every poll.
-        client = _get_logs_client()
-        resp = client.query_workspace(
-            workspace_id=workspace_id,
-            query=query,
-            timespan=timedelta(days=lookback_days),
-        )
+        try:
+            client = _get_logs_client()
+            resp = client.query_workspace(
+                workspace_id=workspace_id,
+                query=query,
+                timespan=timedelta(days=lookback_days),
+            )
 
-        if resp.status == LogsQueryStatus.FAILURE:
-            # resp has .partial_error / .message depending on SDK version
-            msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
-            raise HTTPException(502, f"Log Analytics query failed: {msg}")
+            if resp.status == LogsQueryStatus.FAILURE:
+                # resp has .partial_error / .message depending on SDK version
+                msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
+                logger.warning(f"Log Analytics query failed: {msg}")
+                return []
 
-        tables: Iterable[Any] = getattr(resp, "tables", None) or []
-        out: list[dict[str, Any]] = []
-        for table in tables:
-            cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
-            for row in table.rows:
-                # Build dict using column names for robust flattening.
-                rowd = dict(zip(cols, row))
-                out.append(_flatten_row(rowd))
-        # The KQL orders desc for portal-friendly reading; re-sort ascending
-        # here so the replay stream plays oldest → newest.
-        out.sort(key=lambda e: _parse_ts_ms(e.get("TimeGenerated")) or 0.0)
-        return out
+            tables: Iterable[Any] = getattr(resp, "tables", None) or []
+            out: list[dict[str, Any]] = []
+            for table in tables:
+                cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
+                for row in table.rows:
+                    # Build dict using column names for robust flattening.
+                    rowd = dict(zip(cols, row))
+                    out.append(_flatten_row(rowd))
+            # The KQL orders desc for portal-friendly reading; re-sort ascending
+            # here so the replay stream plays oldest → newest.
+            out.sort(key=lambda e: _parse_ts_ms(e.get("TimeGenerated")) or 0.0)
+            return out
+        except Exception as e:
+            logger.warning(f"Trace query error: {type(e).__name__}: {str(e)[:200]}")
+            return []
 
     return await asyncio.to_thread(_run)
 
@@ -409,11 +415,42 @@ AppTraces
         )
         client = LogsQueryClient(cred)
         try:
-            resp = client.query_workspace(
-                workspace_id=workspace_id,
-                query=kql,
-                timespan=timedelta(hours=lookback_hours),
-            )
+            try:
+                resp = client.query_workspace(
+                    workspace_id=workspace_id,
+                    query=kql,
+                    timespan=timedelta(hours=lookback_hours),
+                )
+            except Exception as e:
+                logger.warning(f"Log Analytics services query error: {type(e).__name__}: {str(e)[:200]}")
+                return []
+
+            if resp.status == LogsQueryStatus.FAILURE:
+                msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
+                logger.warning(f"Log Analytics query failed: {msg}")
+                return []
+
+            out: list[dict[str, Any]] = []
+            for table in getattr(resp, "tables", None) or []:
+                cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
+                for row in table.rows:
+                    rowd = dict(zip(cols, row))
+                    stid = str(rowd.get("service_tree_id") or "").strip()
+                    xcv = str(rowd.get("xcv") or "").strip()
+                    if not stid or not xcv:
+                        continue
+                    out.append(
+                        {
+                            "service_tree_id": stid,
+                            "service_name": display_service_name(str(rowd.get("service_name") or stid).strip() or stid) or stid,
+                            "xcv": xcv,
+                            "event_count": int(rowd.get("event_count") or 0),
+                            "last_seen": str(rowd.get("last_seen") or ""),
+                            "has_action_planner": bool(rowd.get("has_action_planner") or False),
+                            "has_sandbox": bool(rowd.get("has_sandbox") or False),
+                        }
+                    )
+            return out
         finally:
             try:
                 client.close()
@@ -423,32 +460,6 @@ AppTraces
                 cred.close()
             except Exception:
                 pass
-
-        if resp.status == LogsQueryStatus.FAILURE:
-            msg = getattr(resp, "partial_error", None) or getattr(resp, "message", "unknown")
-            raise HTTPException(502, f"Log Analytics query failed: {msg}")
-
-        out: list[dict[str, Any]] = []
-        for table in getattr(resp, "tables", None) or []:
-            cols = [c.name if hasattr(c, "name") else str(c) for c in table.columns]
-            for row in table.rows:
-                rowd = dict(zip(cols, row))
-                stid = str(rowd.get("service_tree_id") or "").strip()
-                xcv = str(rowd.get("xcv") or "").strip()
-                if not stid or not xcv:
-                    continue
-                out.append(
-                    {
-                        "service_tree_id": stid,
-                        "service_name": display_service_name(str(rowd.get("service_name") or stid).strip() or stid) or stid,
-                        "xcv": xcv,
-                        "event_count": int(rowd.get("event_count") or 0),
-                        "last_seen": str(rowd.get("last_seen") or ""),
-                        "has_action_planner": bool(rowd.get("has_action_planner") or False),
-                        "has_sandbox": bool(rowd.get("has_sandbox") or False),
-                    }
-                )
-        return out
 
     return await asyncio.to_thread(_run)
 

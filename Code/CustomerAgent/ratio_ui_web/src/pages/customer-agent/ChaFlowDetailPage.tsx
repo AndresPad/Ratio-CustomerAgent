@@ -510,8 +510,18 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
   const active = live.stage;
   const running = live.running || live.loading;
   const elapsed = live.elapsed;
-  const complete = reached.length === INVESTIGATION_STAGES.length && !running;
   const traceLines = live.traceLines;
+  // Gate "complete" on:
+  //  - all investigation stages reached
+  //  - replay no longer running
+  //  - the trace reveal has actually caught up to all trace lines
+  // This prevents the Action Plan strip from appearing while the
+  // agents are visibly still talking (i.e. reasoning still in flight).
+  const complete =
+    reached.length === INVESTIGATION_STAGES.length &&
+    !running &&
+    traceLines.length > 0 &&
+    live.traceCount >= traceLines.length;
   const hypotheses = live.hypotheses;
   const rootCause = live.rootCause;
   const counts = live.nodeCounts;
@@ -1261,8 +1271,10 @@ function ConversationHero({
           </div>
 
           {/* Action plan strip \u2014 collapsed by default; opens to show what
-              the dedicated Action Plan agent produced AFTER reasoning. */}
-          <ActionPlanStrip items={actionPlanItems} />
+              the dedicated Action Plan agent produced AFTER reasoning.
+              Hidden entirely until the investigation is fully complete so
+              it never appears alongside in-flight reasoning. */}
+          {complete && <ActionPlanStrip items={actionPlanItems} />}
 
           {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
               + sandbox_execution_complete events. Auto-shows while a run is
