@@ -276,11 +276,12 @@ export default function ChaNeuralCanvasPage() {
       {/* Themed content region. Everything inside .cha-v4-themed is
           subject to the light-theme filter when data-cha-theme="light". */}
       <div className="cha-v4-themed">
-        {/* Service tab bar — hidden until the initial SLI/signal stage
-            has been reached for at least one service, so the SQL / AKS /
-            VM tabs don't appear before the first investigation has begun
-            thinking. */}
-        {Object.values(progressMap).some((p) => p.reachedCount >= 1) && (
+        {/* Service tab bar — hidden until the initial SLI Collector
+            (signal) stage has FINISHED for at least one service, i.e.
+            the investigation has progressed past 'signal' into 'symptom'
+            or beyond. This keeps the SQL / AKS / VM tabs from appearing
+            while the SLI collector is still thinking. */}
+        {Object.values(progressMap).some((p) => p.reachedCount >= 2) && (
           <ServiceTabs
             services={serviceOptions}
             activeId={activeServiceId}
