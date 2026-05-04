@@ -1321,6 +1321,36 @@ function ConversationHero({
     [chat, revealedCount],
   );
 
+  // Gate the Sandbox Executions strip on the throttled chat reveal so a
+  // run only appears once the Sandbox Coder / Python Sandbox bubble
+  // that introduces it has actually been typed out. Without this, the
+  // mock replay populates `sandboxRuns` from raw trace events the
+  // moment they fire, which is well ahead of the 1.5s/bubble narrator
+  // pace -- so the operator would see "Sandbox Executions: 2 runs"
+  // before they've heard the agent describe what it's running.
+  const revealedSandboxCount = useMemo(() => {
+    let n = 0;
+    for (const t of revealedChat) {
+      const a = t.agent;
+      if (
+        a === 'sandbox_coder' ||
+        a === 'code_generator' ||
+        a === 'python_runner' ||
+        a === 'python_executor'
+      ) {
+        n++;
+      }
+    }
+    // Each sandbox run is typically introduced by a "code generated"
+    // bubble and finalised by an "execution complete" bubble, so two
+    // sandbox-related bubbles ~= one fully revealed run.
+    return Math.floor(n / 2);
+  }, [revealedChat]);
+  const revealedSandboxRuns = useMemo(
+    () => sandboxRuns.slice(0, Math.min(revealedSandboxCount, sandboxRuns.length)),
+    [sandboxRuns, revealedSandboxCount],
+  );
+
   // Reveal the real signal title only after the agents have actually
   // surfaced the issue *in the chat*. The throttled chat reveal is our
   // single source of truth for "the audience has seen this happen" --
@@ -1708,8 +1738,10 @@ function ConversationHero({
 
           {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
               + sandbox_execution_complete events. Auto-shows while a run is
-              in flight; auto-hides 5s after success. */}
-          <SandboxStrip runs={sandboxRuns} />
+              in flight; auto-hides 5s after success. Gated on the
+              throttled chat reveal so a run only appears once the
+              Sandbox Coder bubble announcing it has been typed out. */}
+          <SandboxStrip runs={revealedSandboxRuns} />
         </div>
 
         {/* ── RIGHT: circular agent ring (non-linear topology) ── */}
