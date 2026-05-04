@@ -1098,6 +1098,15 @@ function ConversationHero({
   useEffect(() => {
     if (chat.length === 0) setRevealedCount(0);
   }, [chat.length]);
+
+  // The investigation isn't truly "Resolved" until every reasoning bubble
+  // has been typed into the chat. The parent's `complete` only tracks the
+  // raw trace reveal (visibleCount), which races ahead of the throttled
+  // chat reveal (revealedCount, 1.5s/bubble). Use this stronger gate for
+  // the Resolved badge, the AgentRing center label, and the action plan
+  // strip so none of them flip until the user has actually seen the full
+  // reasoning play out.
+  const fullyComplete = complete && chat.length > 0 && revealedCount >= chat.length;
   useEffect(() => {
     if (revealedCount >= chat.length) return;
     // Always reveal one bubble at a time \u2014 even if the investigation
@@ -1314,11 +1323,11 @@ function ConversationHero({
         <span style={{ color: '#5d6f87' }}>{'\u00b7'}</span>
         <span
           style={{
-            color: complete ? '#00c853' : activeColor,
+            color: fullyComplete ? '#00c853' : activeColor,
             fontWeight: 700,
           }}
         >
-          {complete ? 'Resolved' : running ? 'Reasoning' : 'Standing by'}
+          {fullyComplete ? 'Resolved' : running ? 'Reasoning' : 'Standing by'}
         </span>
         <span style={{ flex: 1 }} />
         <span
@@ -1449,7 +1458,7 @@ function ConversationHero({
               fully complete AND the chat has finished revealing every
               reasoning bubble, so it never appears alongside in-flight
               reasoning. */}
-          {complete && revealedCount >= chat.length && chat.length > 0 && (
+          {fullyComplete && (
             <ActionPlanStrip items={actionPlanItems} />
           )}
 
@@ -1469,7 +1478,7 @@ function ConversationHero({
           stage={active}
           reachedSet={reachedSet}
           running={running}
-          complete={complete}
+          complete={fullyComplete}
         />
       </div>
     </div>

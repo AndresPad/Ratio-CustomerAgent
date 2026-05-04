@@ -967,6 +967,15 @@ function ConversationHero({
     [chat, revealedCount],
   );
 
+  // The investigation isn't truly "Resolved" until every reasoning bubble
+  // has been typed into the chat. The parent's `complete` only tracks the
+  // raw trace reveal (visibleCount), which races ahead of the throttled
+  // chat reveal (revealedCount, 1.5s/bubble). Use this stronger gate for
+  // the Resolved badge, the AgentRing center label, and the action plan
+  // strip so none of them flip until the user has actually seen the full
+  // reasoning play out.
+  const fullyComplete = complete && chat.length > 0 && revealedCount >= chat.length;
+
   // Real Action Plan agent utterances (LLM responses where AgentName ===
   // 'action_plan_agent'). These are shown in a separate collapsible
   // section at the bottom of the chat panel \u2014 the action plan is the
@@ -1135,10 +1144,10 @@ function ConversationHero({
             width: 8,
             height: 8,
             borderRadius: '50%',
-            background: complete ? '#00c853' : running ? activeColor : '#607d8b',
-            boxShadow: running && !complete ? `0 0 10px ${activeColor}` : 'none',
+            background: fullyComplete ? '#00c853' : running ? activeColor : '#607d8b',
+            boxShadow: running && !fullyComplete ? `0 0 10px ${activeColor}` : 'none',
             animation:
-              running && !complete ? 'cha-pulse 1.2s ease-in-out infinite' : 'none',
+              running && !fullyComplete ? 'cha-pulse 1.2s ease-in-out infinite' : 'none',
           }}
         />
         <span style={{ fontWeight: 700, color: '#cfd8e3' }}>
@@ -1150,11 +1159,11 @@ function ConversationHero({
         <span style={{ color: '#5d6f87' }}>{'\u00b7'}</span>
         <span
           style={{
-            color: complete ? '#00c853' : activeColor,
+            color: fullyComplete ? '#00c853' : activeColor,
             fontWeight: 700,
           }}
         >
-          {complete ? 'Resolved' : running ? 'Reasoning' : 'Standing by'}
+          {fullyComplete ? 'Resolved' : running ? 'Reasoning' : 'Standing by'}
         </span>
         <span style={{ flex: 1 }} />
         <span
@@ -1274,7 +1283,7 @@ function ConversationHero({
               the dedicated Action Plan agent produced AFTER reasoning.
               Hidden entirely until the investigation is fully complete so
               it never appears alongside in-flight reasoning. */}
-          {complete && <ActionPlanStrip items={actionPlanItems} />}
+          {fullyComplete && <ActionPlanStrip items={actionPlanItems} />}
 
           {/* Sandbox code execution strip \u2014 surfaces sandbox_code_generated
               + sandbox_execution_complete events. Auto-shows while a run is
@@ -1292,7 +1301,7 @@ function ConversationHero({
           stage={active}
           reachedSet={reachedSet}
           running={running}
-          complete={complete}
+          complete={fullyComplete}
         />
       </div>
     </div>
