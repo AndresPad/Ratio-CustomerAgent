@@ -1102,6 +1102,7 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         symptoms={narratedStageIdx >= SYM_IDX ? symptomItems : []}
         hypotheses={narratedStageIdx >= HYP_IDX ? hypotheses : []}
         evidence={narratedStageIdx >= EVD_IDX ? evidenceItems : []}
+        showVerdicts={complete}
       />
     </div>
   );
@@ -1958,6 +1959,9 @@ interface RelationshipTreeProps {
   symptoms: { title: string; hypothesis?: string; confidence?: number }[];
   hypotheses: Hypothesis[];
   evidence: { label: string; tool: string }[];
+  /** When false, hypothesis verdict scores (e.g. "85% supported") are
+   *  hidden because scoring/reasoning has not finished yet. */
+  showVerdicts?: boolean;
 }
 
 const REL_COL_W = 200;
@@ -1974,6 +1978,7 @@ function RelationshipTree({
   symptoms,
   hypotheses: rawHypotheses,
   evidence,
+  showVerdicts = false,
 }: RelationshipTreeProps) {
   // Dedupe hypotheses by normalized id (case + whitespace insensitive)
   // keeping the first occurrence. Defends against upstream sources that
@@ -2249,8 +2254,12 @@ function RelationshipTree({
                 the hypothesis statement and the subtitle now communicates
                 supported/refuted with an explicit color. */}
             {hypotheses.map((h, i) => {
-              const verdict =
-                h.status === 'supported'
+              // Hide scoring numbers until the investigation has
+              // actually finished reasoning — otherwise "85% supported"
+              // appears before the Reasoner has spoken.
+              const verdict = !showVerdicts
+                ? { label: 'Hypothesis', color: '#666' }
+                : h.status === 'supported'
                   ? { label: `${h.score}% supported`, color: '#16a34a' }
                   : h.status === 'refuted'
                     ? { label: `${h.score}% refuted`, color: '#dc2626' }
