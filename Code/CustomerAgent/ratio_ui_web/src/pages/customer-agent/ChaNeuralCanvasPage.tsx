@@ -1042,8 +1042,18 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         </div>
       )}
 
-      {/* Root Cause + Confidence + Summary */}
-      <RootCauseSection rootCause={rootCause ?? undefined} visible={rootCause != null} />
+      {/* Root Cause + Confidence + Summary — same gate as the
+          Hypothesis panel: only appears once the narrator has finished
+          delivering the "Investigation complete. Root cause: ..." line. */}
+      <RootCauseSection
+        rootCause={rootCause ?? undefined}
+        visible={
+          rootCause != null &&
+          complete &&
+          narratorChat.length > 0 &&
+          narratorRevealed >= narratorChat.length
+        }
+      />
 
       {/* Pipeline / graph view collapsed into a small details strip at the
           bottom \u2014 the user explicitly asked to de-emphasise the linear
@@ -1109,7 +1119,11 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
         symptoms={narratedStageIdx >= SYM_IDX ? symptomItems : []}
         hypotheses={narratedStageIdx >= HYP_IDX ? hypotheses : []}
         evidence={narratedStageIdx >= EVD_IDX ? evidenceItems : []}
-        showVerdicts={complete}
+        showVerdicts={
+          complete &&
+          narratorChat.length > 0 &&
+          narratorRevealed >= narratorChat.length
+        }
       />
     </div>
   );
