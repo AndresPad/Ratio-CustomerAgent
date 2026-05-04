@@ -276,13 +276,18 @@ export default function ChaNeuralCanvasPage() {
       {/* Themed content region. Everything inside .cha-v4-themed is
           subject to the light-theme filter when data-cha-theme="light". */}
       <div className="cha-v4-themed">
-        {/* Service tab bar */}
-        <ServiceTabs
-          services={serviceOptions}
-          activeId={activeServiceId}
-          progressMap={progressMap}
-          onSelect={setActiveServiceId}
-        />
+        {/* Service tab bar — hidden until the initial SLI/signal stage
+            has been reached for at least one service, so the SQL / AKS /
+            VM tabs don't appear before the first investigation has begun
+            thinking. */}
+        {Object.values(progressMap).some((p) => p.reachedCount >= 1) && (
+          <ServiceTabs
+            services={serviceOptions}
+            activeId={activeServiceId}
+            progressMap={progressMap}
+            onSelect={setActiveServiceId}
+          />
+        )}
 
         {/* Render every service in parallel; toggle visibility so all keep
             polling Log Analytics even when the operator looks at one. */}
