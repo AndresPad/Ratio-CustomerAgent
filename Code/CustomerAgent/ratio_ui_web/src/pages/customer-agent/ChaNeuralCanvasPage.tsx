@@ -1031,12 +1031,17 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
       </div>
 
       {/* Hypothesis verdict (kept full-width below the hero). The
-          score bars / SUPPORTED-REFUTED labels are gated on `complete`
+          panel itself is hidden until the narrator has started talking
+          through the hypothesis stage (so it appears in lock-step with
+          the relationship graph's Hypotheses column). The score bars /
+          SUPPORTED-REFUTED labels are additionally gated on `complete`
           so the verdict numbers don't appear before the Reasoner has
           actually finished scoring. */}
-      <div style={{ padding: '16px 20px' }}>
-        <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
-      </div>
+      {narratedStageIdx >= HYP_IDX && (
+        <div style={{ padding: '16px 20px' }}>
+          <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
+        </div>
+      )}
 
       {/* Root Cause + Confidence + Summary */}
       <RootCauseSection rootCause={rootCause ?? undefined} visible={rootCause != null} />

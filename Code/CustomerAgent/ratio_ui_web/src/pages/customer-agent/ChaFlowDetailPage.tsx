@@ -732,11 +732,14 @@ function ServicePanel({ service, view, isActive, onProgress }: ServicePanelProps
         <span style={{ fontSize: 11, color: '#999' }}>{elapsed.toFixed(1)}s</span>
       </div>
 
-      {/* Hypothesis verdict (kept full-width below the hero). Verdict
-          scores are hidden until the investigation is complete. */}
-      <div style={{ padding: '16px 20px' }}>
-        <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
-      </div>
+      {/* Hypothesis verdict (kept full-width below the hero). Hidden
+          entirely until the hypothesis stage has been reached so the
+          panel appears in lock-step with the relationship graph. */}
+      {reached.includes('hypothesis') && (
+        <div style={{ padding: '16px 20px' }}>
+          <HypothesisPanel hypotheses={hypotheses} showVerdicts={complete} />
+        </div>
+      )}
 
       {/* Root Cause + Confidence + Summary */}
       <RootCauseSection rootCause={rootCause ?? undefined} visible={rootCause != null} />
