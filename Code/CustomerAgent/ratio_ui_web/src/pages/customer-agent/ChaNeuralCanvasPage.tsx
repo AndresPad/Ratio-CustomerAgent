@@ -1032,10 +1032,11 @@ function ServicePanel({ service, view, isActive, onProgress, reloadNonce, onRelo
 
       {/* Hypothesis verdict (kept full-width below the hero). The
           panel only surfaces once the investigation is fully complete
-          (the reasoning chat has reached the "Investigation complete.
-          Root cause: ..." line), so the verdict scores and the panel
-          itself appear together at the very end of the demo. */}
-      {complete && (
+          AND the narrator chat has finished revealing every reasoning
+          bubble (so the "Investigation complete. Root cause: ..." line
+          has actually appeared on screen). The score bars / verdicts
+          appear together with the panel at that point. */}
+      {complete && narratorRevealed >= narratorChat.length && narratorChat.length > 0 && (
         <div style={{ padding: '16px 20px' }}>
           <HypothesisPanel hypotheses={hypotheses} showVerdicts />
         </div>
