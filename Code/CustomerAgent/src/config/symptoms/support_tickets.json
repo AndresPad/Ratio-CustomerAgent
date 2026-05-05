@@ -2,27 +2,33 @@
   "templates": [
     {
       "id": "SYM-SUP-001",
-      "name": "Support Case Filed",
+      "name": "Customer Filed Support Case",
       "signal_sources": ["SIG-TYPE-2"],
-      "weight": 1,
-      "template": "Support case '{case_number}' (Severity {severity}) filed by '{customer_name}' for '{support_product_name}' on subscription '{azure_subscription_id}': '{title}'. Created: {created_date_time}. State: {state}.",
-      "extracted_when": "A support case exists in the dataset for the relevant time window, regardless of severity or escalation status.",
+      "granularity": "single_case",
+      "weight": 2,
+      "template": "Support case '{case_number}' (Severity {severity}) filed by '{customer_name}' for '{support_product_name}': '{title}'. Created: {created_date_time}. State: {state}.",
+      "extracted_when": "A support case exists in the dataset for the relevant time window — direct signal of customer impact, regardless of severity or escalation status.",
       "fields": {
-        "from_data": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "resource_uri", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_tpid", "customer_name"]
+        "from_data": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"]
       },
       "filters": {
-        "case_exists": true
+        "min_row_count": 1
+      },
+      "suppress_when": {
+        "granularity_activated": "multi_case_same_product",
+        "matching_fields": ["customer_name", "support_product_name"]
       }
     },
     {
       "id": "SYM-SUP-002",
-      "name": "Critical Situation (CritSit)",
+      "name": "Customer Raised CritSit",
       "signal_sources": ["SIG-TYPE-2"],
+      "granularity": "crit_sit",
       "weight": 3,
-      "template": "Support case '{case_number}' (Severity {severity}) for '{support_product_name}' is flagged as CritSit by '{customer_name}': '{title}'. Resource: {resource_uri}.",
-      "extracted_when": "The support case has IsCritSit set to True, indicating a critical situation escalation requiring urgent attention.",
+      "template": "{case_count} support case(s) flagged as CritSit for '{support_product_name}' by '{customer_name}': [{case_numbers}]. First case created: {earliest_case_date}. CritSit indicates a critical business-impacting situation requiring immediate attention.",
+      "extracted_when": "One or more cases flagged as CritSit — critical business impact requiring immediate attention.",
       "fields": {
-        "from_data": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "resource_uri", "created_date_time", "severity", "azure_subscription_id", "customer_tpid", "customer_name"]
+        "from_data": ["case_numbers", "case_count", "state", "support_product_name", "region", "earliest_case_date", "azure_subscription_id", "customer_name"]
       },
       "filters": {
         "is_crit_sit": true
@@ -30,46 +36,63 @@
     },
     {
       "id": "SYM-SUP-003",
-      "name": "Escalated Support Case",
+      "name": "Customer Escalated Support Case",
       "signal_sources": ["SIG-TYPE-2"],
+      "granularity": "escalated",
       "weight": 2,
-      "template": "Support case '{case_number}' for '{support_product_name}' was escalated (initial severity {initial_severity} -> current severity {severity}): '{title}'. Resource: {resource_uri}.",
-      "extracted_when": "The support case has IsEscalated set to True or the current Severity is higher (closer to A) than the InitialSeverity, indicating the issue worsened after filing.",
+      "template": "Support case '{case_number}' for '{support_product_name}' was escalated (initial severity {initial_severity} → current severity {severity}): '{title}'. Customer '{customer_name}'. The severity increase post-filing indicates the issue is more serious than initially assessed.",
+      "extracted_when": "Case severity increased post-filing — issue is worse than initially assessed.",
       "fields": {
-        "from_data": ["case_number", "title", "state", "support_product_name", "resource_uri", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_tpid", "customer_name"]
+        "from_data": ["case_number", "title", "state", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"]
       },
       "filters": {
-        "is_escalated_or_severity_increased": true
+        "is_escalated": true
       }
     },
     {
       "id": "SYM-SUP-004",
-      "name": "Multi-Case Same Product",
+      "name": "Multiple Cases Same Product",
       "signal_sources": ["SIG-TYPE-2"],
+      "granularity": "multi_case_same_product",
       "weight": 2,
-      "template": "{case_count} support cases filed for '{support_product_name}' across subscriptions for customer '{customer_name}'. Cases: {case_numbers}. This pattern suggests a systemic product issue rather than an isolated incident.",
-      "extracted_when": "Multiple support cases exist for the same SupportProductName within the time window, indicating a recurring or widespread product issue.",
+      "template": "{case_count} support cases filed for '{support_product_name}' by customer '{customer_name}'. Max severity: {max_severity}. Multiple cases for the same product suggest a systemic product issue rather than an isolated incident.",
+      "extracted_when": "Multiple support cases exist for the same product — systemic product issue rather than an isolated incident.",
       "fields": {
-        "from_data": ["case_number", "title", "support_product_name", "created_date_time", "severity", "azure_subscription_id", "customer_tpid", "customer_name"],
-        "llm_derived": ["case_count", "case_numbers"]
+        "from_data": ["support_product_name", "case_count", "max_severity", "customer_name"]
       },
       "filters": {
-        "min_case_count_same_product": 2
+        "min_case_count": 2
       }
     },
     {
       "id": "SYM-SUP-005",
-      "name": "Multi-Customer Support Requests",
+      "name": "Multiple Customers Filed Support Requests",
       "signal_sources": ["SIG-TYPE-2"],
+      "granularity": "multi_customer_same_product",
       "weight": 3,
-      "template": "{customer_count} distinct customers have filed support cases for '{support_product_name}' in the last 4 hours: {customer_list}. Total cases: {total_case_count}. Max severity: {max_severity}. This cross-customer pattern indicates a widespread service problem rather than a customer-specific issue.",
-      "extracted_when": "Support cases from multiple distinct Customer_CloudCustomerName values exist for the same SupportProductName within the time window, indicating that the issue is not isolated to a single customer.",
+      "template": "{distinct_customer_count} distinct customers have filed support cases for '{support_product_name}': {customer_list}. Total cases: {total_case_count}. Max severity: {max_severity}. CritSit cases: {crit_sit_count}. Regions: {region_list}. This cross-customer pattern confirms a widespread service problem.",
+      "extracted_when": "2+ distinct customers filed SRs for the same product — confirms the issue is widespread, not isolated to a single customer.",
       "fields": {
-        "from_data": ["case_number", "title", "support_product_name", "created_date_time", "severity", "azure_subscription_id", "customer_name"],
-        "llm_derived": ["customer_count", "customer_list", "total_case_count", "max_severity"]
+        "from_data": ["support_product_name", "total_case_count", "distinct_customer_count", "max_severity", "crit_sit_count", "customer_list", "region_list", "case_numbers", "earliest_case", "latest_case"]
       },
       "filters": {
         "min_distinct_customers": 2
+      }
+    },
+    {
+      "id": "SYM-SUP-006",
+      "name": "Multiple Customer CritSits",
+      "signal_sources": ["SIG-TYPE-2"],
+      "granularity": "multi_customer_crit_sit",
+      "weight": 4,
+      "template": "{distinct_crit_sit_customer_count} distinct customers have CritSit-flagged cases for '{support_product_name}': {crit_sit_customer_list}. Total CritSit cases: {crit_sit_count}. Regions: {crit_sit_region_list}. Multiple customers experiencing critical situations for the same product indicates a severe, widespread platform failure requiring immediate coordinated response.",
+      "extracted_when": "Multiple customers raised CritSits for the same product — smoking-gun signal of critical platform failure requiring immediate coordinated response.",
+      "fields": {
+        "from_data": ["support_product_name", "distinct_crit_sit_customer_count", "crit_sit_count", "crit_sit_customer_list", "crit_sit_region_list", "crit_sit_case_numbers", "earliest_case", "latest_case"]
+      },
+      "filters": {
+        "is_crit_sit": true,
+        "min_distinct_crit_sit_customers": 2
       }
     }
   ]

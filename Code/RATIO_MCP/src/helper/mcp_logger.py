@@ -37,6 +37,8 @@ _LOGGING_ENABLED = os.getenv("ENABLE_MCP_LOGGING", "true").strip().lower() in ("
 # ── Global feature flag: set LOG_MCP_CONTENT=false to redact tool/query/result content
 _LOG_CONTENT = os.getenv("LOG_MCP_CONTENT", "true").strip().lower() in ("true", "1", "yes")
 _REDACTED = "[REDACTED]"
+# Max chars for logged content. 0 = no truncation.
+_LOG_MAX_CHARS = int(os.getenv("LOG_MAX_CHARS", "0"))
 
 # ── Per-item content logging overrides loaded from config files ──────────────
 # Each entry: { "log_input": bool, "log_output": bool }
@@ -286,16 +288,20 @@ class MCPLogger:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _redact(text: str, max_len: int = 2000, log_content: bool | None = None) -> str:
+def _redact(text: str, max_len: int | None = None, log_content: bool | None = None) -> str:
     """Return truncated text if content logging is enabled, else '[REDACTED]'.
 
     Args:
+        max_len: Override char limit. None → use LOG_MAX_CHARS env (0 = no limit).
         log_content: Per-field override. None → fall back to global LOG_MCP_CONTENT.
     """
     should_log = log_content if log_content is not None else _LOG_CONTENT
     if not should_log:
         return _REDACTED
-    return _truncate(text, max_len)
+    limit = max_len if max_len is not None else _LOG_MAX_CHARS
+    if limit <= 0:
+        return text
+    return _truncate(text, limit)
 
 
 def _should_log_input(item_name: str | None = None) -> bool:

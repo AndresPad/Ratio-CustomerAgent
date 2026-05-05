@@ -1,21 +1,3 @@
 {
-  "hypotheses": [
-    {
-      "id": "HYP-RISK-003",
-      "name": "Regional Platform Degradation May Impact Primary Customer",
-      "statement": "Region '{region}' shows SLI degradation across {impacted_subscriptions} subscriptions for SLI '{slo_sli_id}'. Other customers are already experiencing breaches — the primary customer's resources in this region are at risk of impact spill-over.",
-      "category": "risk",
-      "expected_symptoms": [
-        "SYM-SLI-006",
-        "SYM-SLI-007",
-        "SYM-SLI-001"
-      ],
-      "min_symptoms_for_match": 2,
-      "evidence_needed": [
-        "ER-SLI-001",
-        "ER-SLI-002"
-      ],
-      "supporting_signals": "Strongest when SYM-SLI-007 (multi-SLI regional degradation across customers) co-occurs with SYM-SLI-001 (primary customer already showing impact in the same region). SYM-SLI-006 alone is a leading warning; combined with SYM-SLI-001 it confirms spill-over is actively happening. Without SYM-SLI-001, this hypothesis serves as a proactive alert — the primary customer is not yet impacted but the risk is elevated."
-    }
-  ]
+  "hypotheses": []
 }

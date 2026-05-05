@@ -2,12 +2,12 @@
   "evidence_requirements": [
     {
       "id": "ER-OUT-001",
-      "signal_source": "SIG-TYPE-3",
       "description": "Recent high-severity or confirmed-outage incidents from IcM. Returns IncidentId, Severity, IsOutage, Title, Status, CreateDate, ImpactStartDate, ChildCount, OwningTenantName, SupportTicketId. Filters: Severity <= 2 or IsOutage == true, configured lookback window and owning tenant names.",
       "category_tag": "icm",
       "tool_name": "collect_incident_details_tool",
       "parameters": {
-        "lookback_hours": "{context.lookback_hours}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}",
         "owning_tenant_names": "{context.owning_tenant_names}"
       },
       "output_fields": ["IncidentId", "Severity", "IsOutage", "Title", "Status", "CreateDate", "ImpactStartDate", "ChildCount", "OwningTenantName", "SupportTicketId"]
@@ -23,15 +23,16 @@
     },
     {
       "id": "ER-SLI-001",
-      "signal_source": "SIG-TYPE-1",
       "description": "SLI breach data for a specific customer and service. Returns per-subscription/region/SLI aggregates: CustomerName, SubscriptionId, Region, SLO_SliId, ImpactedResources, TotalImpactDurationMin, EarliestImpactStart, LatestImpactEnd, AvgValueAcrossWindows, MinValueAcrossWindows.",
       "category_tag": "sli",
       "tool_name": "collect_impacted_resource_customer_tool",
       "parameters": {
         "service_tree_id": "{context.service_tree_id}",
-        "customer_name": "{context.customer_name}"
+        "customer_name": "{context.customer_name}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}"
       },
-      "output_fields": ["CustomerName", "SubscriptionId", "Region", "SLO_SliId", "ImpactedResources", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"]
+      "output_fields": ["CustomerName", "SubscriptionId", "Region", "SLO_SliId", "SliCategory", "ImpactedResources", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"]
     },
     {
       "id": "ER-SLI-002",
@@ -39,76 +40,60 @@
       "category_tag": "sli",
       "tool_name": "collect_impacted_resource_multicustomer_tool",
       "parameters": {
-        "service_tree_id": "{context.service_tree_id}"
+        "service_tree_id": "{context.service_tree_id}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}"
       },
       "output_fields": ["Region", "SLO_SliId", "ImpactedResources", "ImpactedSubscriptions", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"]
     },
     {
       "id": "ER-TKT-001",
-      "signal_source": "SIG-TYPE-2",
-      "description": "Support cases filed by a customer. Returns: CaseNumber, Title, State, IsCritSit, SupportProductName, ResourceUri, CreatedDateTime, IsEscalated, InitialSeverity, Severity, AzureSubscriptionId, Customer_CloudCustomerName. Filters to the configured lookback window for configured support products.",
+      "description": "Support cases filed by a customer. Returns: CaseNumber, Title, State, IsCritSit, SupportProductName, CreatedDateTime, IsEscalated, InitialSeverity, Severity, AzureSubscriptionId, Customer_CloudCustomerName. Filters to the configured lookback window for configured support products.",
       "category_tag": "support",
       "tool_name": "collect_support_request_tool",
       "parameters": {
         "customer_name": "{context.customer_name}",
-        "lookback_hours": "{context.lookback_hours}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}",
         "support_product_names": "{context.support_product_names}"
       },
-      "output_fields": ["CaseNumber", "Title", "State", "IsCritSit", "SupportProductName", "ResourceUri", "CreatedDateTime", "IsEscalated", "InitialSeverity", "Severity", "AzureSubscriptionId", "Customer_CloudCustomerName"]
+      "output_fields": ["CaseNumber", "Title", "State", "IsCritSit", "SupportProductName", "Region", "CreatedDateTime", "IsEscalated", "InitialSeverity", "Severity", "AzureSubscriptionId", "Customer_CloudCustomerName"]
     },
     {
       "id": "ER-TKT-002",
-      "description": "Cross-customer support request analysis to determine if other customers are also filing tickets for the same service/product. Calls collect_support_request_tool without a customer_name to return all recent support cases across all customers.",
+      "description": "Cross-customer support request aggregation to determine if other customers are also filing tickets for the same product. Returns pre-aggregated per-product summary: TotalCaseCount, DistinctCustomerCount, DistinctCritSitCustomerCount, MaxSeverity, CritSitCount, CustomerList, CritSitCustomerList, RegionList, CritSitRegionList, CaseNumbers, CritSitCaseNumbers, EarliestCase, LatestCase. Only includes products with 2+ distinct customers.",
       "category_tag": "support",
-      "tool_name": "collect_support_request_tool",
+      "tool_name": "collect_support_request_multicustomer_tool",
       "parameters": {
-        "lookback_hours": "{context.lookback_hours}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}",
         "support_product_names": "{context.support_product_names}"
       },
-      "output_fields": ["CaseNumber", "Title", "State", "IsCritSit", "SupportProductName", "ResourceUri", "CreatedDateTime", "IsEscalated", "InitialSeverity", "Severity", "AzureSubscriptionId", "Customer_CloudCustomerName"]
-    },
-    {
-      "id": "ER-LOAD-001",
-      "description": "Workload and throughput metrics to detect traffic spikes. Uses the SLI impacted resource data to identify abnormal load patterns — high ImpactedResources with short TotalImpactDurationMin suggests a spike rather than sustained degradation.",
-      "category_tag": "sli",
-      "tool_name": "collect_impacted_resource_customer_tool",
-      "parameters": {
-        "service_tree_id": "{context.service_tree_id}",
-        "customer_name": "{context.customer_name}"
-      },
-      "note": "Load analysis is derived from SLI breach patterns. Agent compares ImpactedResources, TotalImpactDurationMin, and AvgValueAcrossWindows to distinguish spikes from sustained failures."
-    },
-    {
-      "id": "ER-LOAD-002",
-      "description": "Cross-customer baseline comparison to determine if the current load pattern is abnormal. Compares the customer-specific SLI data (ER-SLI-001) against the multi-customer aggregate (ER-SLI-002) — if the customer's degradation is worse than the platform average, it suggests a customer-specific workload issue.",
-      "category_tag": "sli",
-      "tool_name": "collect_impacted_resource_multicustomer_tool",
-      "parameters": {
-        "service_tree_id": "{context.service_tree_id}"
-      },
-      "note": "Baseline comparison: agent compares ER-SLI-001 (customer) AvgValueAcrossWindows against ER-SLI-002 (all customers) to detect customer-specific anomalies vs platform-wide issues."
+      "output_fields": ["SupportProductName", "TotalCaseCount", "DistinctCustomerCount", "DistinctCritSitCustomerCount", "MaxSeverity", "CritSitCount", "CustomerList", "CritSitCustomerList", "RegionList", "CritSitRegionList", "CaseNumbers", "CritSitCaseNumbers", "EarliestCase", "LatestCase"]
     },
     {
       "id": "ER-DEP-002",
-      "signal_source": "SIG-TYPE-4",
       "description": "Dependency service SLI breach data. For each dependency service configured in dependency_services.json, calls collect_impacted_resource_multicustomer_tool with the dependency's service_tree_id to detect SLI degradation in customer regions. Returns per-region/SLI aggregates enriched with DependencyServiceName.",
       "category_tag": "dependency",
       "tool_name": "collect_impacted_resource_multicustomer_tool",
       "parameters": {
-        "service_tree_id": "{dependency.service_tree_id}"
+        "service_tree_id": "{dependency.service_tree_id}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}"
       },
       "output_fields": ["DependencyServiceName", "Region", "SLO_SliId", "ImpactedResources", "ImpactedSubscriptions", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"],
       "note": "Called once per dependency service. Results are filtered to customer regions (from ER-REGION-001) before symptom evaluation."
     },
     {
       "id": "ER-REGION-001",
-      "signal_source": "SIG-TYPE-4",
       "description": "Distinct regions where the customer has monitored resources for their primary service. Used to scope dependency service scanning to only regions that matter for the customer.",
       "category_tag": "dependency",
       "tool_name": "collect_customer_region_tool",
       "parameters": {
         "service_tree_id": "{context.service_tree_id}",
-        "customer_name": "{context.customer_name}"
+        "customer_name": "{context.customer_name}",
+        "start_time": "{context.start_time}",
+        "end_time": "{context.end_time}"
       },
       "output_fields": ["CustomerName", "Region"]
     }

@@ -44,7 +44,19 @@ def get_user_token() -> str | None:
 
 
 # ── Service-to-service credential (Managed Identity / DefaultAzureCredential) ─
-_MANAGED_IDENTITY_CLIENT_ID = os.getenv("MIDDLEWARE_AUTH_CLIENT_ID", "").strip()
+_raw_mi_client_id = os.getenv("MIDDLEWARE_AUTH_CLIENT_ID", "").strip()
+# Guard against placeholder values that were never replaced
+_MANAGED_IDENTITY_CLIENT_ID = (
+    _raw_mi_client_id
+    if _raw_mi_client_id and not _raw_mi_client_id.startswith("<")
+    else ""
+)
+if _raw_mi_client_id and not _MANAGED_IDENTITY_CLIENT_ID:
+    logging.getLogger(__name__).warning(
+        "MIDDLEWARE_AUTH_CLIENT_ID looks like a placeholder ('%s') — ignoring. "
+        "Will fall back to DefaultAzureCredential.",
+        _raw_mi_client_id,
+    )
 
 # Lazy-initialised credential (created on first call, reused afterwards).
 _credential = None
@@ -115,17 +127,30 @@ def get_mcp_bearer_token() -> str | None:
             and now < _MCP_TOKEN_CACHE.get("expires_on", 0) - _MCP_TOKEN_SLACK_SECONDS):
         return _MCP_TOKEN_CACHE["token"]
 
+    # Log when refreshing an expired token (vs first acquisition)
+    if _MCP_TOKEN_CACHE.get("token"):
+        logger.info(
+            "MCP bearer token expired (expires_on=%.0f, now=%.0f) — refreshing",
+            _MCP_TOKEN_CACHE.get("expires_on", 0), now,
+        )
+
     # ── 1 & 2. Managed Identity / DefaultAzureCredential ────────────────────
-    try:
-        credential = _get_credential()
-        token_obj = credential.get_token(scope)
-        if token_obj and token_obj.token:
-            expires_on = getattr(token_obj, "expires_on", None) or (now + 3600)
-            _MCP_TOKEN_CACHE.update({"token": token_obj.token, "expires_on": expires_on})
-            logger.info("MCP bearer token acquired via %s", type(credential).__name__)
-            return token_obj.token
-    except Exception as e:
-        logger.debug("Managed Identity / DefaultAzureCredential failed for MCP scope %s: %s", scope, e)
+    # Build scope candidates: bare GUID/.default and api://GUID/.default
+    scope_candidates = [scope]
+    if "://" not in aud:
+        scope_candidates.append(f"api://{aud}/.default")
+
+    credential = _get_credential()
+    for sc in scope_candidates:
+        try:
+            token_obj = credential.get_token(sc)
+            if token_obj and token_obj.token:
+                expires_on = getattr(token_obj, "expires_on", None) or (now + 3600)
+                _MCP_TOKEN_CACHE.update({"token": token_obj.token, "expires_on": expires_on})
+                logger.info("MCP bearer token acquired via %s (scope=%s)", type(credential).__name__, sc)
+                return token_obj.token
+        except Exception as e:
+            logger.debug("%s failed for MCP scope %s: %s", type(credential).__name__, sc, e)
 
     # ── 3. Certificate credential (client-credentials grant via KV cert) ─────
     tenant_id = os.getenv("AUTH_TENANT_ID")
@@ -181,4 +206,9 @@ def get_mcp_bearer_token() -> str | None:
         except Exception as e:
             logger.warning("Certificate credential flow failed: %s", e)
 
+    logger.warning(
+        "All MCP bearer token acquisition methods failed — "
+        "MCP requests will be unauthenticated and may return 401. "
+        "Check MCP_AUTH_AUDIENCE, managed identity, and certificate config."
+    )
     return None

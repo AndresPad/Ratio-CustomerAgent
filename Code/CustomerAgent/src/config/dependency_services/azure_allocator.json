@@ -6,18 +6,22 @@
   "sli_symptoms": [
     {
       "sliId": "ReservationServiceAPI.ReservationService Availability Rate v2.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM creation and resize operations fail to start", "AllocationFailed errors increase on VM operations"]
     },
     {
       "sliId": "AzAllocatorAPI.AllocatorWorker Availability Rate v2.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM creation and resize operations fail to start", "AllocationFailed errors increase on VM operations"]
     },
     {
       "sliId": "AzAllocatorAPI.PlacementStore Availability Rate v3.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM creation and resize operations fail to start", "AllocationFailed errors increase on VM operations"]
     },
     {
       "sliId": "AzAllocatorAPI.Allocation Success Rate v2.Signal",
+      "sli_category": "capacity",
       "symptoms": ["VM creation and resize operations fail to start", "AllocationFailed errors increase on VM operations", "Stopped-deallocated VMs cannot be started"]
     }
   ]

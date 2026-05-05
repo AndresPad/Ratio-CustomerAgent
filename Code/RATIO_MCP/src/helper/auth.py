@@ -69,8 +69,27 @@ def get_cert_credential(*, client_id: str | None = None):
 
 def get_token(scope: str, *, cert_client_id: str | None = None) -> str:
     """Get an access token using the full auth chain.
-    Priority: ManagedIdentity → DefaultAzureCredential → CertificateCredential.
+
+    When *cert_client_id* is provided the CertificateCredential is tried
+    **first** so that the caller-specified identity is preferred over the
+    environment's default (e.g. a Container-App system-assigned MI that may
+    lack access to the target resource).
+
+    Priority when cert_client_id is set:
+        CertificateCredential → ManagedIdentity → DefaultAzureCredential
+    Priority otherwise:
+        ManagedIdentity → DefaultAzureCredential → CertificateCredential
     """
+    # ── When an explicit client ID is requested, try cert first ──────────
+    if cert_client_id:
+        cert_cred = get_cert_credential(client_id=cert_client_id)
+        if cert_cred:
+            try:
+                return cert_cred.get_token(scope).token
+            except Exception as e:
+                logger.warning("Auth (Cert-first, client_id=%s) failed for '%s': %s",
+                               cert_client_id, scope, e)
+
     # 1. Managed Identity
     if _USER_ASSIGNED_CLIENT_ID:
         try:
@@ -86,13 +105,14 @@ def get_token(scope: str, *, cert_client_id: str | None = None) -> str:
     except Exception as e:
         logger.warning("Auth step 2 (Default) failed for '%s': %s", scope, e)
 
-    # 3. CertificateCredential
-    cert_cred = get_cert_credential(client_id=cert_client_id)
-    if cert_cred:
-        try:
-            return cert_cred.get_token(scope).token
-        except Exception as e:
-            logger.warning("Auth step 3 (Cert) failed for '%s': %s", scope, e)
+    # 3. CertificateCredential (fallback — only if not already tried above)
+    if not cert_client_id:
+        cert_cred = get_cert_credential(client_id=cert_client_id)
+        if cert_cred:
+            try:
+                return cert_cred.get_token(scope).token
+            except Exception as e:
+                logger.warning("Auth step 3 (Cert) failed for '%s': %s", scope, e)
 
     raise ConnectionError(f"All auth methods failed for scope '{scope}'.")
 
@@ -201,11 +221,20 @@ class AzureAuthMiddleware:
             raise ValueError("matching jwk not found")
 
         expected_issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
+
+        # Accept both bare GUID and api://GUID audience formats so that
+        # tokens acquired with either scope variant pass jwt.decode verification.
+        if self.audience:
+            bare = _normalize_aud(self.audience)
+            accepted_audiences = [bare, f"api://{bare}"]
+        else:
+            accepted_audiences = None
+
         return jwt.decode(
             token,
             key=key,
             algorithms=["RS256"],
-            audience=self.audience if self.audience else None,
+            audience=accepted_audiences,
             issuer=expected_issuer,
             options={
                 "verify_aud": bool(self.audience),

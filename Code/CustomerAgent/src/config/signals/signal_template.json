@@ -2,129 +2,144 @@
   "signal_types": [
     {
       "id": "SIG-TYPE-1",
-      "name": "SLI Breach Detected",
-      "description": "One or more SLIs have impacted resources with degraded values over a meaningful duration, as reported by SLI monitoring data.",
+      "name": "Service SLI Breach Detected",
+      "description": "One or more SLIs have impacted resources with degraded values over a meaningful duration. Aggregated to region-grain: each signal represents the total impact for a customerÃ—regionÃ—SLI combination.",
       "data_source": "SLI breach Kusto query",
-      "data_fields": ["CustomerName", "SubscriptionId", "Region", "SLO_SliId", "ImpactedResources", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"],
+      "data_fields": ["CustomerName", "SubscriptionId", "Region", "SLO_SliId", "SliCategory", "ImpactedResources", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"],
       "collection_tools": [
         {
           "tool_name": "collect_impacted_resource_customer_tool",
           "parameters_from_context": {
             "service_tree_id": "service_tree_id",
-            "customer_name": "customer_name"
+            "customer_name": "customer_name",
+            "start_time": "start_time",
+            "end_time": "end_time"
           },
-          "feeds_granularities": ["subscription_region", "cross_region", "cross_subscription", "multi_sli"]
+          "feeds_granularities": ["region_slicategory", "cross_region", "multi_sli_region"]
         },
         {
           "tool_name": "collect_impacted_resource_multicustomer_tool",
           "parameters_from_context": {
-            "service_tree_id": "service_tree_id"
+            "service_tree_id": "service_tree_id",
+            "start_time": "start_time",
+            "end_time": "end_time"
           },
-          "feeds_granularities": ["multi_customer_same_region_sli", "multi_sli_region_wide"]
+          "feeds_granularities": ["cross_customer_region"]
         }
       ],
+      "aggregation": {
+        "description": "Raw per-subscription rows are aggregated to region-grain before activation evaluation. sandbox_coder performs this aggregation; signal_builder evaluates rules on the aggregated output.",
+        "pre_aggregation_group_by": {
+          "region_slicategory": ["CustomerName", "Region", "SliCategory"],
+          "cross_region": ["CustomerName", "SliCategory"],
+          "multi_sli_region": ["CustomerName", "Region"],
+          "cross_customer_region": ["Region", "SliCategory"]
+        },
+        "computed_metrics": {
+          "impacted_subscriptions": "count_distinct(SubscriptionId)",
+          "impacted_resources": "sum(ImpactedResources)",
+          "total_duration_min": "max(TotalImpactDurationMin)",
+          "avg_value": "mean(AvgValueAcrossWindows)",
+          "min_value": "min(MinValueAcrossWindows)",
+          "earliest_start": "min(EarliestImpactStart)",
+          "latest_end": "max(LatestImpactEnd)",
+          "severity_tier": "classify_severity(min_value, avg_value)"
+        },
+        "severity_tiers": {
+          "CRITICAL": "min_value == 0 and avg_value < 25.0",
+          "HIGH": "min_value == 0 or avg_value < 50.0",
+          "WARNING": "avg_value < 75.0",
+          "LOW": "avg_value >= 75.0"
+        }
+      },
       "granularities": [
         {
-          "granularity": "subscription_region",
-          "group_by": ["CustomerName", "SubscriptionId", "Region", "SLO_SliId"],
+          "granularity": "region_slicategory",
+          "description": "Per-region per-SLI-category impact for the target customer. Aggregates all SLIs of the same category (e.g. Availability, Latency) in a region — how many subscriptions, resources, and distinct SLIs are impacted for this category in this region.",
+          "group_by": ["CustomerName", "Region", "SliCategory"],
+          "aggregates": {
+            "distinct_sli_count": "count_distinct(SLO_SliId)",
+            "impacted_subscriptions": "count_distinct(SubscriptionId)",
+            "impacted_resources": "sum(ImpactedResources)",
+            "total_duration_min": "max(TotalImpactDurationMin)",
+            "avg_value": "mean(AvgValueAcrossWindows)",
+            "min_value": "min(MinValueAcrossWindows)",
+            "sli_list": "collect_distinct(SLO_SliId)"
+          },
           "confidence": "Medium",
-          "rationale": "A single subscription+region SLI breach is the base signal. Could be localized noise or a real issue — confidence increases with severity (near-zero values) and duration.",
-          "inputs": ["customer_name", "subscription_id", "region", "slo_sli_id", "impacted_resources", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"],
+          "rationale": "A region+SLI-category breach is the base signal. Grouping by category (Availability, Latency, etc.) collapses related SLIs into a single signal — multiple SLIs in the same category reinforce each other rather than producing noise.",
+          "inputs": ["customer_name", "region", "sli_category", "distinct_sli_count", "sli_list", "impacted_subscriptions", "impacted_resources", "total_duration_min", "avg_value", "min_value", "earliest_start", "latest_end", "severity_tier"],
           "activation": "impacted_resources >= 1",
           "activation_rules": [
             {"impacted_resources_min": 1}
           ],
-          "strength_formula": "impacted_resources * log2(1 + total_impact_duration_min / 5) * (100 - avg_value_across_windows) / 100",
-          "max_raw_strength": 30.0
+          "strength_formula": "distinct_sli_count * impacted_subscriptions * impacted_resources * (100 - avg_value) / 100 * log2(1 + total_duration_min / 5)",
+          "max_raw_strength": 80.0
         },
         {
           "granularity": "cross_region",
-          "group_by": ["CustomerName", "SLO_SliId"],
+          "description": "Same SLI category breached across multiple regions for the customer. Indicates a widespread platform issue rather than a region-specific problem.",
+          "group_by": ["CustomerName", "SliCategory"],
           "aggregates": {
             "distinct_regions": "count_distinct(Region)",
-            "total_impacted_resources": "sum(ImpactedResources)",
-            "avg_value_across_windows": "avg(AvgValueAcrossWindows)"
+            "distinct_sli_count": "count_distinct(SLO_SliId)",
+            "total_impacted_subscriptions": "sum(impacted_subscriptions)",
+            "total_impacted_resources": "sum(impacted_resources)",
+            "avg_value": "mean(avg_value)",
+            "sli_list": "collect_distinct(SLO_SliId)",
+            "region_list": "collect_distinct(Region)"
           },
           "confidence": "High",
-          "rationale": "The same SLI breached across multiple distinct regions indicates a widespread platform issue rather than a region-specific problem.",
-          "inputs": ["customer_name", "slo_sli_id", "region", "impacted_resources", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"],
+          "rationale": "The same SLI category breached across multiple distinct regions rules out region-specific causes. The more regions affected, the more likely a global platform or service-level issue.",
+          "inputs": ["customer_name", "sli_category", "distinct_regions", "distinct_sli_count", "sli_list", "region_list", "total_impacted_subscriptions", "total_impacted_resources", "avg_value"],
           "activation": "distinct_regions >= 2",
           "activation_rules": [
             {"distinct_regions_min": 2}
           ],
-          "strength_formula": "distinct_regions * total_impacted_resources * (100 - avg_value_across_windows) / 100",
-          "max_raw_strength": 40.0
+          "strength_formula": "distinct_regions * total_impacted_subscriptions * (100 - avg_value) / 100",
+          "max_raw_strength": 60.0
         },
         {
-          "granularity": "cross_subscription",
-          "group_by": ["CustomerName", "SLO_SliId"],
-          "aggregates": {
-            "distinct_subscriptions": "count_distinct(SubscriptionId)",
-            "total_impacted_resources": "sum(ImpactedResources)",
-            "avg_value_across_windows": "avg(AvgValueAcrossWindows)"
-          },
-          "confidence": "High",
-          "rationale": "The same SLI breached across multiple subscriptions for the same customer rules out subscription-specific misconfiguration — likely a platform-level or customer-wide issue.",
-          "inputs": ["customer_name", "slo_sli_id", "subscription_id", "impacted_resources", "total_impact_duration_min", "avg_value_across_windows"],
-          "activation": "distinct_subscriptions >= 2",
-          "activation_rules": [
-            {"distinct_subscriptions_min": 2}
-          ],
-          "strength_formula": "distinct_subscriptions * total_impacted_resources * (100 - avg_value_across_windows) / 100",
-          "max_raw_strength": 40.0
-        },
-        {
-          "granularity": "multi_sli",
-          "group_by": ["CustomerName", "SubscriptionId", "Region"],
+          "granularity": "multi_sli_region",
+          "description": "Multiple distinct SLIs breached in the same region for the customer. Indicates a broader systemic issue in that region rather than a single-SLI anomaly.",
+          "group_by": ["CustomerName", "Region"],
           "aggregates": {
             "distinct_sli_count": "count_distinct(SLO_SliId)",
-            "total_impacted_resources": "sum(ImpactedResources)"
+            "total_impacted_subscriptions": "sum(impacted_subscriptions)",
+            "total_impacted_resources": "sum(impacted_resources)",
+            "sli_list": "collect_distinct(SLO_SliId)"
           },
           "confidence": "High",
-          "rationale": "Multiple distinct SLIs breached for the same subscription+region indicates a broader systemic issue rather than a single SLI anomaly.",
-          "inputs": ["customer_name", "subscription_id", "region", "slo_sli_id", "impacted_resources"],
+          "rationale": "Multiple SLIs failing in the same region points to regional infrastructure stress, a shared dependency failure, or a broad platform issue — not an isolated SLI flap.",
+          "inputs": ["customer_name", "region", "distinct_sli_count", "sli_list", "total_impacted_subscriptions", "total_impacted_resources"],
           "activation": "distinct_sli_count >= 2",
           "activation_rules": [
             {"distinct_sli_count_min": 2}
           ],
-          "strength_formula": "distinct_sli_count * total_impacted_resources",
-          "max_raw_strength": 40.0
+          "strength_formula": "distinct_sli_count * total_impacted_subscriptions * total_impacted_resources",
+          "max_raw_strength": 80.0
         },
         {
-          "granularity": "multi_customer_same_region_sli",
-          "group_by": ["Region", "SLO_SliId"],
+          "granularity": "cross_customer_region",
+          "description": "Cross-customer regional degradation — multiple subscriptions (across different customers) impacted for the same SLI category in the same region. Confirms platform-wide issue at the category level.",
+          "group_by": ["Region", "SliCategory"],
           "aggregates": {
+            "distinct_sli_count": "count_distinct(SLO_SliId)",
+            "distinct_customers": "count_distinct(CustomerName)",
             "impacted_subscriptions": "sum(ImpactedSubscriptions)",
             "total_impacted_resources": "sum(ImpactedResources)",
-            "avg_value_across_windows": "avg(AvgValueAcrossWindows)"
+            "avg_value": "mean(AvgValueAcrossWindows)",
+            "sli_list": "collect_distinct(SLO_SliId)"
           },
           "confidence": "High",
-          "rationale": "Multiple subscriptions across different customers breaching the same SLI in the same region indicates a regional platform issue. Primary customer resources in the same region are at risk of impact spill-over.",
-          "inputs": ["region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"],
+          "rationale": "Multiple subscriptions across different customers breaching the same SLI category in the same region confirms a regional platform issue — not customer-specific or SLI-specific.",
+          "inputs": ["region", "sli_category", "distinct_sli_count", "distinct_customers", "sli_list", "impacted_subscriptions", "total_impacted_resources", "avg_value", "min_value"],
           "activation": "impacted_subscriptions >= 3",
           "activation_rules": [
             {"impacted_subscriptions_min": 3}
           ],
-          "strength_formula": "impacted_subscriptions * total_impacted_resources * (100 - avg_value_across_windows) / 100",
-          "max_raw_strength": 80.0
-        },
-        {
-          "granularity": "multi_sli_region_wide",
-          "group_by": ["Region"],
-          "aggregates": {
-            "distinct_sli_count": "count_distinct(SLO_SliId)",
-            "impacted_subscriptions": "sum(ImpactedSubscriptions)",
-            "total_impacted_resources": "sum(ImpactedResources)"
-          },
-          "confidence": "High",
-          "rationale": "Multiple distinct SLIs breached across customers in the same region indicates broad regional degradation — not a single-SLI anomaly. Primary customer resources co-located in this region face elevated risk.",
-          "inputs": ["region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows"],
-          "activation": "distinct_sli_count >= 2",
-          "activation_rules": [
-            {"distinct_sli_count_min": 2}
-          ],
-          "strength_formula": "distinct_sli_count * impacted_subscriptions * total_impacted_resources",
-          "max_raw_strength": 200.0
+          "strength_formula": "distinct_customers * impacted_subscriptions * total_impacted_resources * (100 - avg_value) / 100",
+          "max_raw_strength": 150.0
         }
       ]
     },
@@ -133,24 +148,26 @@
       "name": "Customer Raised Support Request",
       "description": "Customer has raised one or more support cases, indicating they are experiencing issues with Azure services.",
       "data_source": "Support case Kusto query",
-      "data_fields": ["CaseNumber", "Title", "State", "IsCritSit", "SupportProductName", "ResourceUri", "CreatedDateTime", "IsEscalated", "InitialSeverity", "Severity", "AzureSubscriptionId", "Customer_TPID", "Customer_CloudCustomerName"],
+      "data_fields": ["CaseNumber", "Title", "State", "IsCritSit", "SupportProductName", "Region", "CreatedDateTime", "IsEscalated", "InitialSeverity", "Severity", "AzureSubscriptionId", "Customer_CloudCustomerName"],
       "collection_tools": [
         {
           "tool_name": "collect_support_request_tool",
           "parameters_from_context": {
             "customer_name": "customer_name",
-            "lookback_hours": "lookback_hours",
+            "start_time": "start_time",
+            "end_time": "end_time",
             "support_product_names": "support_product_names"
           },
           "feeds_granularities": ["single_case", "crit_sit", "escalated", "multi_case_same_product"]
         },
         {
-          "tool_name": "collect_support_request_tool",
+          "tool_name": "collect_support_request_multicustomer_tool",
           "parameters_from_context": {
-            "lookback_hours": "lookback_hours",
+            "start_time": "start_time",
+            "end_time": "end_time",
             "support_product_names": "support_product_names"
           },
-          "feeds_granularities": ["multi_customer_same_product"]
+          "feeds_granularities": ["multi_customer_same_product", "multi_customer_crit_sit"]
         }
       ],
       "granularities": [
@@ -159,10 +176,10 @@
           "group_by": ["CaseNumber"],
           "confidence": "Medium",
           "rationale": "A single support case is a meaningful signal but could be routine. Confidence increases with severity and CritSit/escalation flags.",
-          "inputs": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "resource_uri", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_tpid", "customer_name"],
+          "inputs": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"],
           "activation": "case exists",
           "activation_rules": [
-            {"case_count_min": 1}
+            {"case_number_present": true}
           ],
           "strength_formula": "(severity == 'A' ? 3 : severity == 'B' ? 2 : 1) * (is_crit_sit ? 3 : 1)",
           "max_raw_strength": 9.0
@@ -172,7 +189,7 @@
           "group_by": ["CaseNumber"],
           "confidence": "High",
           "rationale": "A CritSit flag means the customer or support engineer has declared a critical situation — this is a high-urgency signal that demands immediate attention.",
-          "inputs": ["case_number", "title", "state", "support_product_name", "resource_uri", "created_date_time", "severity", "azure_subscription_id", "customer_tpid", "customer_name"],
+          "inputs": ["case_number", "title", "state", "support_product_name", "region", "created_date_time", "severity", "azure_subscription_id", "customer_name"],
           "activation": "is_crit_sit == True",
           "activation_rules": [
             {"is_crit_sit": true}
@@ -185,7 +202,7 @@
           "group_by": ["CaseNumber"],
           "confidence": "High",
           "rationale": "An escalated case or one where severity increased post-filing indicates the issue is more serious than initially assessed. This strengthens the signal.",
-          "inputs": ["case_number", "title", "state", "support_product_name", "resource_uri", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_tpid", "customer_name"],
+          "inputs": ["case_number", "title", "state", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"],
           "activation": "is_escalated == True or severity > initial_severity",
           "activation_rules": [
             {"is_escalated_or_severity_increased": true}
@@ -202,10 +219,10 @@
           },
           "confidence": "High",
           "rationale": "Multiple support cases for the same SupportProductName from the same customer suggests a systemic product issue rather than an isolated incident.",
-          "inputs": ["case_number", "title", "support_product_name", "created_date_time", "severity", "azure_subscription_id", "customer_tpid", "customer_name"],
+          "inputs": ["case_number", "title", "support_product_name", "created_date_time", "severity", "azure_subscription_id", "customer_name"],
           "activation": "distinct_cases_same_product >= 2",
           "activation_rules": [
-            {"distinct_cases_same_product_min": 2}
+            {"case_count_min": 2}
           ],
           "strength_formula": "case_count * (max_severity == 'A' ? 3 : max_severity == 'B' ? 2 : 1)",
           "max_raw_strength": 15.0
@@ -213,20 +230,40 @@
         {
           "granularity": "multi_customer_same_product",
           "group_by": ["SupportProductName"],
+          "data_fields": ["SupportProductName", "TotalCaseCount", "DistinctCustomerCount", "DistinctCritSitCustomerCount", "MaxSeverity", "CritSitCount", "CustomerList", "CritSitCustomerList", "RegionList", "CritSitRegionList", "CaseNumbers", "CritSitCaseNumbers", "EarliestCase", "LatestCase"],
           "aggregates": {
-            "customer_count": "count_distinct(Customer_CloudCustomerName)",
-            "total_case_count": "count(CaseNumber)",
-            "max_severity": "min(Severity)"
+            "customer_count": "pre_aggregated:DistinctCustomerCount",
+            "total_case_count": "pre_aggregated:TotalCaseCount",
+            "max_severity": "pre_aggregated:MaxSeverity"
           },
           "confidence": "High",
           "rationale": "Multiple distinct customers filing support cases for the same product indicates a platform-wide service issue rather than a customer-specific problem.",
-          "inputs": ["case_number", "title", "support_product_name", "created_date_time", "severity", "azure_subscription_id", "customer_name"],
+          "inputs": ["support_product_name", "total_case_count", "distinct_customer_count", "distinct_crit_sit_customer_count", "max_severity", "crit_sit_count", "customer_list", "crit_sit_customer_list", "region_list", "crit_sit_region_list", "case_numbers", "crit_sit_case_numbers", "earliest_case", "latest_case"],
           "activation": "distinct_customers_same_product >= 2",
           "activation_rules": [
-            {"distinct_customers_same_product_min": 2}
+            {"customer_count_min": 2}
           ],
           "strength_formula": "customer_count * total_case_count * (max_severity == 'A' ? 3 : max_severity == 'B' ? 2 : 1)",
           "max_raw_strength": 40.0
+        },
+        {
+          "granularity": "multi_customer_crit_sit",
+          "group_by": ["SupportProductName"],
+          "data_fields": ["SupportProductName", "DistinctCritSitCustomerCount", "CritSitCount", "CritSitCustomerList", "CritSitRegionList", "CritSitCaseNumbers", "EarliestCase", "LatestCase"],
+          "aggregates": {
+            "distinct_crit_sit_customer_count": "pre_aggregated:DistinctCritSitCustomerCount",
+            "crit_sit_count": "pre_aggregated:CritSitCount"
+          },
+          "confidence": "Highest",
+          "rationale": "Multiple distinct customers raising CritSit for the same product is the strongest possible support signal — a smoking-gun indicator of critical platform failure requiring immediate coordinated response.",
+          "inputs": ["support_product_name", "distinct_crit_sit_customer_count", "crit_sit_count", "crit_sit_customer_list", "crit_sit_region_list", "crit_sit_case_numbers", "earliest_case", "latest_case"],
+          "activation": "is_crit_sit == true and distinct_crit_sit_customers >= 2",
+          "activation_rules": [
+            {"is_crit_sit": true},
+            {"distinct_crit_sit_customer_count_min": 2}
+          ],
+          "strength_formula": "distinct_crit_sit_customer_count * crit_sit_count * 3",
+          "max_raw_strength": 60.0
         }
       ]
     },
@@ -240,25 +277,33 @@
         {
           "tool_name": "collect_incident_details_tool",
           "parameters_from_context": {
-            "lookback_hours": "lookback_hours",
+            "start_time": "start_time",
+            "end_time": "end_time",
             "owning_tenant_names": "owning_tenant_names"
           },
-          "feeds_granularities": ["single_incident", "outage_confirmed", "with_child_incidents", "customer_correlated"]
+          "feeds_granularities": ["one_or_more_incident", "outage_confirmed", "with_child_incidents", "customer_correlated", "multi_incident"]
         }
       ],
       "granularities": [
         {
-          "granularity": "single_incident",
-          "group_by": ["IncidentId"],
+          "granularity": "one_or_more_incident",
+          "group_by": ["OwningTenantName"],
+          "aggregates": {
+            "incident_count": "count(IncidentId)",
+            "max_severity": "min(Severity)",
+            "outage_count": "count_where(IsOutage == true)",
+            "incident_ids": "collect(IncidentId)",
+            "earliest_impact_date": "min(ImpactStartDate)"
+          },
           "confidence": "Medium",
-          "rationale": "A single incident from a service team is a meaningful signal but many incidents are exploratory or low-impact. Confidence increases with severity and outage confirmation.",
-          "inputs": ["incident_id", "severity", "is_outage", "status", "title", "create_date", "impact_start_date", "child_count", "support_ticket_id", "owning_tenant_name"],
-          "activation": "incident exists",
+          "rationale": "One or more incidents from a service team is a meaningful signal but many incidents are exploratory or low-impact. Confidence increases with count, severity, and outage confirmation.",
+          "inputs": ["owning_tenant_name", "incident_count", "incident_ids", "max_severity", "outage_count", "earliest_impact_date"],
+          "activation": "incident_count >= 1",
           "activation_rules": [
             {"incident_count_min": 1}
           ],
-          "strength_formula": "(4 - severity) * (is_outage ? 2 : 1)",
-          "max_raw_strength": 6.0
+          "strength_formula": "incident_count * (4 - max_severity) * (outage_count > 0 ? 2 : 1)",
+          "max_raw_strength": 12.0
         },
         {
           "granularity": "outage_confirmed",
@@ -277,57 +322,87 @@
           "granularity": "with_child_incidents",
           "group_by": ["IncidentId"],
           "confidence": "High",
-          "rationale": "Incidents with child incidents indicate widespread impact — multiple teams or regions are involved. The more children, the broader the issue.",
+          "rationale": "Confirmed outage (IsOutage=true) with multiple child incidents indicates widespread verified impact across teams or regions. The more children, the broader the blast radius.",
           "inputs": ["incident_id", "severity", "is_outage", "status", "title", "child_count", "owning_tenant_name"],
-          "activation": "child_count >= 5",
+          "activation": "is_outage == true and child_count >= 3",
           "activation_rules": [
-            {"child_count_min": 5}
+            {"is_outage": true},
+            {"child_count_min": 3}
           ],
-          "strength_formula": "child_count * (4 - severity)",
+          "strength_formula": "child_count * (4 - severity) * 2",
           "max_raw_strength": 50.0
         },
         {
           "granularity": "customer_correlated",
           "group_by": ["IncidentId"],
           "confidence": "High",
-          "rationale": "When an incident has a linked SupportTicketId, it directly correlates a platform incident with a customer complaint — strong evidence of customer impact.",
-          "inputs": ["incident_id", "severity", "status", "title", "support_ticket_id", "owning_tenant_name"],
-          "activation": "support_ticket_id is not empty",
+          "rationale": "Confirmed outage (IsOutage=true) linked to a customer's SupportTicketId — direct correlation between a verified platform outage and a customer complaint.",
+          "inputs": ["incident_id", "severity", "is_outage", "status", "title", "support_ticket_id", "owning_tenant_name"],
+          "activation": "is_outage == true and support_ticket_id is not empty",
           "activation_rules": [
+            {"is_outage": true},
             {"support_ticket_id_present": true}
           ],
-          "strength_formula": "(4 - severity) * 1.5",
-          "max_raw_strength": 4.5
+          "strength_formula": "(4 - severity) * 3",
+          "max_raw_strength": 9.0
+        },
+        {
+          "granularity": "multi_incident",
+          "group_by": ["OwningTenantName"],
+          "aggregates": {
+            "incident_count": "count(IncidentId)",
+            "max_severity": "min(Severity)",
+            "outage_count": "count_where(IsOutage == true)",
+            "incident_ids": "collect(IncidentId)",
+            "earliest_impact_date": "min(ImpactStartDate)"
+          },
+          "confidence": "High",
+          "rationale": "Multiple confirmed outages (IsOutage=true) from the same tenant indicate a systemic verified failure pattern — not an isolated incident but a recurring or compound failure.",
+          "inputs": ["owning_tenant_name", "incident_count", "incident_ids", "max_severity", "outage_count", "earliest_impact_date"],
+          "activation": "outage_count >= 1 and incident_count >= 2",
+          "activation_rules": [
+            {"outage_count_min": 1},
+            {"incident_count_min": 2}
+          ],
+          "strength_formula": "incident_count * (4 - max_severity) * 2",
+          "max_raw_strength": 24.0
         }
       ]
     },
     {
       "id": "SIG-TYPE-4",
       "name": "Dependency Service Degradation",
-      "description": "Dependency services (Allocator, CIS, Regional Network Manager, etc.) that the primary customer service relies on show SLI breaches in regions where the customer has resources. Detected proactively — before customer impact spills over.",
+      "description": "Dependency services that the primary customer service relies on show SLI breaches in regions where the customer has resources. Aggregated to region-grain per dependency service.",
       "data_source": "SLI breach Kusto query (multi-customer) per dependency service, filtered to customer regions",
-      "data_fields": ["DependencyServiceName", "Region", "SLO_SliId", "ImpactedResources", "ImpactedSubscriptions", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"],
+      "data_fields": ["DependencyServiceName", "DependencyCategory", "Region", "SLO_SliId", "ImpactedResources", "ImpactedSubscriptions", "TotalImpactDurationMin", "EarliestImpactStart", "LatestImpactEnd", "AvgValueAcrossWindows", "MinValueAcrossWindows"],
       "collection_strategy": "dependency_scan",
       "dependency_mappings": "dependency_mappings.json",
       "region_tool": {
         "tool_name": "collect_customer_region_tool",
         "parameters_from_context": {
           "service_tree_id": "service_tree_id",
-          "customer_name": "customer_name"
+          "customer_name": "customer_name",
+          "start_time": "start_time",
+          "end_time": "end_time"
         }
       },
       "dependency_tool": {
         "tool_name": "collect_impacted_resource_multicustomer_tool",
-        "parameter_field": "service_tree_id"
+        "parameter_field": "service_tree_id",
+        "extra_params_from_context": {
+          "start_time": "start_time",
+          "end_time": "end_time"
+        }
       },
       "granularities": [
         {
-          "granularity": "dep_sli_breach_in_customer_region",
+          "granularity": "dep_region_sli",
+          "description": "Single dependency SLI breach in a customer region. Base dependency signal.",
           "group_by": ["DependencyServiceName", "Region", "SLO_SliId"],
           "confidence": "Medium",
-          "rationale": "A single dependency service SLI breach in a customer region is the base dependency signal. The dependency is degraded where the customer has resources — this is a leading indicator of potential spill-over.",
-          "inputs": ["dependency_service_name", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"],
-          "activation": "impacted_resources >= 1",
+          "rationale": "A single dependency service SLI breach in a customer region is a leading indicator of potential spill-over. Confidence increases with impact breadth.",
+          "inputs": ["dependency_service_name", "dependency_category", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"],
+          "activation": "impacted_resources >= 10",
           "activation_rules": [
             {"impacted_resources_min": 10}
           ],
@@ -335,7 +410,8 @@
           "max_raw_strength": 40.0
         },
         {
-          "granularity": "multi_dep_sli_breach_in_region",
+          "granularity": "dep_multi_sli_region",
+          "description": "Multiple SLIs breached for the same dependency service in a customer region — broad service-level degradation.",
           "group_by": ["DependencyServiceName", "Region"],
           "aggregates": {
             "distinct_sli_count": "count_distinct(SLO_SliId)",
@@ -345,7 +421,7 @@
           },
           "confidence": "High",
           "rationale": "Multiple SLIs breached for the same dependency service in a customer region indicates broad service-level degradation, not a single-SLI anomaly.",
-          "inputs": ["dependency_service_name", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows"],
+          "inputs": ["dependency_service_name", "dependency_category", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows"],
           "activation": "distinct_sli_count >= 2",
           "activation_rules": [
             {"distinct_sli_count_min": 2}
@@ -354,7 +430,8 @@
           "max_raw_strength": 200.0
         },
         {
-          "granularity": "multi_dep_service_breach_in_region",
+          "granularity": "dep_multi_service_region",
+          "description": "Multiple dependency services degraded in the same customer region — indicates broad regional platform failure.",
           "group_by": ["Region"],
           "aggregates": {
             "distinct_dep_count": "count_distinct(DependencyServiceName)",
@@ -364,7 +441,7 @@
           },
           "confidence": "High",
           "rationale": "Multiple dependency services degraded in the same customer region indicates a broad regional platform issue — resource exhaustion, infrastructure failure, or cascading dependency chain breakage.",
-          "inputs": ["dependency_service_name", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions"],
+          "inputs": ["dependency_service_name", "dependency_category", "region", "slo_sli_id", "impacted_resources", "impacted_subscriptions"],
           "activation": "distinct_dep_count >= 2",
           "activation_rules": [
             {"distinct_dep_count_min": 2}
@@ -382,7 +459,7 @@
       "description": "All three independent data sources (SLI, support, incident) show concurrent activity — unlikely to be coincidental.",
       "required_signal_types": ["SIG-TYPE-1", "SIG-TYPE-2", "SIG-TYPE-3"],
       "activation_rules": [
-        {"min_types_with_data": 3}
+        {"min_types_activated": 3}
       ],
       "confidence": "High",
       "strength_formula": "sum(type_max_strengths) * 2.0",
@@ -395,7 +472,7 @@
       "description": "SLI degradation detected alongside customer support activity, confirming customer-visible impact.",
       "required_signal_types": ["SIG-TYPE-1", "SIG-TYPE-2"],
       "activation_rules": [
-        {"min_types_with_data": 2}
+        {"min_types_activated": 2}
       ],
       "confidence": "Medium-High",
       "strength_formula": "sum(type_max_strengths) * 1.5",
@@ -408,7 +485,7 @@
       "description": "Service team incident coincides with measurable SLI degradation, confirming the incident has real performance impact.",
       "required_signal_types": ["SIG-TYPE-3", "SIG-TYPE-1"],
       "activation_rules": [
-        {"min_types_with_data": 2}
+        {"min_types_activated": 2}
       ],
       "confidence": "Medium-High",
       "strength_formula": "sum(type_max_strengths) * 1.5",
@@ -421,7 +498,7 @@
       "description": "Service team incident coincides with customer support cases, confirming both team awareness and customer impact.",
       "required_signal_types": ["SIG-TYPE-3", "SIG-TYPE-2"],
       "activation_rules": [
-        {"min_types_with_data": 2}
+        {"min_types_activated": 2}
       ],
       "confidence": "Medium-High",
       "strength_formula": "sum(type_max_strengths) * 1.5",
@@ -434,12 +511,12 @@
       "description": "Dependency service degradation detected alongside customer SLI breaches — confirms the dependency issue is cascading into customer-visible impact.",
       "required_signal_types": ["SIG-TYPE-4", "SIG-TYPE-1"],
       "activation_rules": [
-        {"min_types_with_data": 2}
+        {"min_types_activated": 2}
       ],
       "confidence": "High",
       "strength_formula": "sum(type_max_strengths) * 1.5",
       "correlation_multiplier": 1.5,
-      "rationale": "SIG-TYPE-4 alone is a leading indicator; when SIG-TYPE-1 also shows customer SLI breaches in the same region, it confirms the dependency degradation is actively impacting the customer. This is the causal chain: dependency → customer."
+      "rationale": "SIG-TYPE-4 alone is a leading indicator; when SIG-TYPE-1 also shows customer SLI breaches in the same region, it confirms the dependency degradation is actively impacting the customer."
     },
     {
       "id": "COMPOUND-006",
@@ -447,7 +524,7 @@
       "description": "Dependency service degradation detected alongside customer support cases — dependency issue is causing customer-reported problems.",
       "required_signal_types": ["SIG-TYPE-4", "SIG-TYPE-2"],
       "activation_rules": [
-        {"min_types_with_data": 2}
+        {"min_types_activated": 2}
       ],
       "confidence": "High",
       "strength_formula": "sum(type_max_strengths) * 1.5",
@@ -467,17 +544,26 @@
       "5": "Critical"
     }
   },
-  "decision_thresholds": {
-    "strong_individual_signal_min_strength": 2.5,
-    "compound_activation_note": "If no individual signal exceeds strong_individual_signal_min_strength, compound signals are evaluated. Any activated compound triggers the GroupChat.",
-    "actions": {
-      "strong_individual_or_compound": "invoke_group_chat",
-      "weak_individual_only": "watchlist",
-      "no_signals": "quiet"
+  "max_concurrent_mcp_calls": 5,
+  "decision_rules": [
+    {
+      "condition": {"any_signal_strength_gte": 2.5},
+      "action": "invoke_group_chat",
+      "description": "Any individual signal type with strength >= 2.5 triggers full investigation."
+    },
+    {
+      "condition": {"any_compound_activated": true},
+      "action": "invoke_group_chat",
+      "description": "Any activated compound signal triggers full investigation."
+    },
+    {
+      "condition": {"any_activated_signals": true},
+      "action": "watchlist",
+      "description": "Weak signals present but below thresholds — add to watchlist for monitoring."
     }
-  },
+  ],
   "confidence_levels": ["Low", "Medium", "Medium-High", "High", "Highest"],
-  "confidence_principle": "Confidence increases as granularity broadens (subscription -> region -> global) and as breadth increases (single SLI -> multiple SLIs -> cross-service).",
-  "adaptive_thresholds_note": "Broader impact (more SLIs, more services) lowers the required degradation %. Sustained duration also lowers the bar. A 0.5% dip on one SLI for 5 minutes is noise; a 0.5% dip across 4 services for 30 minutes is real.",
+  "confidence_principle": "Confidence increases as granularity broadens (region -> cross-region -> cross-customer) and as breadth increases (single SLI -> multiple SLIs -> cross-service).",
+  "grain_principle": "Signals are evaluated at REGION grain. Raw per-subscription/per-resource rows are aggregated to region-level summaries before activation rules fire. This reduces data volume while preserving signal fidelity — the count of impacted subscriptions/resources per region captures the same information as individual subscription signals.",
   "customer_context_note": "Customer bucket memberships (S500, Unified, ACE) and subscription criticality are attributes attached to affected subscriptions, not signal filters. When a signal fires, impacted subscriptions are enriched with their customer context for triage prioritization."
 }

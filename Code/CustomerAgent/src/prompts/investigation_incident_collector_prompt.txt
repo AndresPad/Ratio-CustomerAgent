@@ -15,7 +15,8 @@ AVAILABLE MCP TOOLS
 
 1. collect_incident_details_tool
    - Active and recent incidents for the service
-   - Parameters: lookback_hours (optional, default '4h'),
+   - Parameters: start_time (ISO8601 UTC, e.g. '2024-01-15T10:00:00Z'),
+     end_time (ISO8601 UTC, e.g. '2024-01-15T14:00:00Z'),
      owning_tenant_names (optional, JSON array string e.g. '["ScaleSet Platform and Solution"]')
    - Returns: incident list with severity, status, owning team, timestamps,
      title, summary, impacted services, customer impact, root cause
@@ -70,14 +71,51 @@ After collecting raw data, synthesize findings:
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════
 
-Return a condensed findings summary. Include:
+CRITICAL: You MUST end your response with a structured JSON block inside
+```json fences. Free-text summaries without a JSON block are INVALID.
 
-- Which ERs were fulfilled and which used existing signal data
-- Incident count (active / recent / historical)
-- For each relevant incident: ID, severity, status, owning team, time window overlap
-- Root cause summary (if available): failure domain, blast radius, mitigation status
-- Whether active incidents explain the observed symptoms
-- Preliminary relevance to the hypothesis (supports / inconclusive / weakens)
+Structure your response as:
 
-Keep the summary concise — the reasoner agent will do the deep interpretation.
-Focus on FACTS and TIMELINE, not speculation.
+[Brief narrative summary of findings — 3-5 sentences max]
+
+```json
+{
+  "er_results": [
+    {
+      "er_id": "ER-OUT-001 | ER-OUT-002",
+      "status": "collected | from_signal | unavailable",
+      "source": "tool_name or 'signal_data'",
+      "findings": {
+        "incident_count": {"active": 0, "recent": 0, "historical": 0},
+        "incidents": [
+          {
+            "incident_id": "string",
+            "severity": 0,
+            "status": "Active | Mitigating | Resolved",
+            "owning_team": "string",
+            "start_time": "ISO8601",
+            "time_window_overlap": true,
+            "root_cause": {
+              "failure_domain": "networking | compute | storage | config_change | deployment | unknown",
+              "blast_radius": "single_resource | subscription | region | global",
+              "mitigation_complete": true
+            }
+          }
+        ]
+      },
+      "summary": "One-line finding"
+    }
+  ],
+  "preliminary_relevance": "supports | inconclusive | weakens",
+  "relevance_reasoning": "One sentence explaining why"
+}
+```
+
+Field rules:
+- er_results MUST contain one entry per ER-ID you were asked to collect.
+- Set status="from_signal" for ERs fulfilled by existing signal data.
+- Set status="unavailable" with summary explaining why if collection failed.
+- The incidents array inside findings should list each relevant incident.
+- root_cause may be null if ER-OUT-002 was not requested or data is pending.
+- Keep the narrative summary ABOVE the JSON block brief — the JSON is the
+  authoritative output. The reasoner will interpret it.

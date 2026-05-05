@@ -4,6 +4,10 @@
     "49c39e84-285c-45e1-9008-ac6b217161e2": {
       "name": "ScaleSet Platform and Solution",
       "dependencies": ["azure_allocator", "azure_capacity_infrastructure_service", "regional_network_manager", "xstore"]
+    },
+    "db348eb2-16db-44b3-b867-f60f7cfb87d4": {
+      "name": "SQL Connectivity",
+      "dependencies": ["sql_availability", "sql_control_plane"]
     }
   }
 }

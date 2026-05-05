@@ -1,16 +1,22 @@
 {
   "poll_interval_minutes": 10,
   "max_concurrent_investigations": 5,
-  "lookback_hours": "4h",
+  "default_lookback_hours": 4,
   "targets": [
     {
       "customer_name": "BlackRock, Inc",
       "service_tree_ids": [
         { 
-          "id": "49c39e84-285c-45e1-9008-ac6b217161e2", 
-          "name": "ScaleSet Platform and Solution", 
-          "support_product_names": ["Azure Virtual Machine - Linux", "Azure Virtual Machine - Windows", "Azure VM-Disk Operations (P360)", "Azure VM insights"], 
-          "owning_tenant_names": ["ScaleSet Platform and Solution",  "WACAP"] 
+          "id": "db348eb2-16db-44b3-b867-f60f7cfb87d4", 
+          "name": "SQL Connectivity", 
+          "support_product_names": ["Azure SQL DB", "SQL Managed Instance"], 
+          "owning_tenant_names": ["SQL Connectivity"] 
+        },
+        { 
+          "id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0", 
+          "name": "Azure Kubernetes Service", 
+          "support_product_names": ["Azure Kubernetes Service (AKS)"], 
+          "owning_tenant_names": ["Azure Kubernetes Service"] 
         }
       ]
     }

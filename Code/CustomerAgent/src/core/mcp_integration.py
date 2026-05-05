@@ -2,6 +2,10 @@
 
 Creates MCPStreamableHTTPTool instances with auth header support
 for passing user tokens to the MCP server.
+
+Includes:
+  - MCP tool discovery & validation (validate_mcp_tools)
+  - Auth header injection with robustness checks
 """
 from __future__ import annotations
 
@@ -34,6 +38,11 @@ def _create_authenticated_http_client():
         bearer = get_mcp_bearer_token()
         if bearer:
             request.headers["Authorization"] = f"Bearer {bearer}"
+        else:
+            logger.warning(
+                "MCP auth: bearer token is None — request to %s will be unauthenticated",
+                request.url,
+            )
         # Also inject X-User-Token if available
         user_token = get_user_token()
         if user_token:
@@ -63,6 +72,8 @@ def _header_provider(_context: dict[str, Any]) -> dict[str, str]:
     bearer = get_mcp_bearer_token()
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
+    else:
+        logger.warning("MCP auth: bearer token is None for tool call — request will be unauthenticated")
 
     # User token for SQL passthrough
     user_token = get_user_token()
@@ -128,3 +139,94 @@ def create_filtered_mcp_tool(agent_name: str, tool_names: list[str]) -> MCPStrea
         name=f"ratio-mcp-{agent_name}",
         allowed_tools=tool_names if tool_names else None,
     )
+
+
+# ── MCP Tool Discovery & Validation ─────────────────────────────
+
+async def discover_mcp_tools(url: str | None = None) -> set[str]:
+    """Query the MCP server for its list of available tool names.
+
+    Uses the MCP JSON-RPC ``tools/list`` method.  Returns an empty set
+    (with a warning) if the server is unreachable so agent creation can
+    proceed gracefully.
+    """
+    import httpx
+
+    server_url = url or MCP_SERVER_URL
+    # MCP JSON-RPC endpoint is at the same URL; send tools/list request
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    }
+
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    bearer = get_mcp_bearer_token()
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(15.0),
+        ) as client:
+            resp = await client.post(server_url, json=payload, headers=headers)
+            if resp.status_code == 401:
+                logger.warning(
+                    "MCP tool discovery: 401 Unauthorized from %s — "
+                    "check MCP_AUTH_AUDIENCE and credentials",
+                    server_url,
+                )
+                return set()
+            resp.raise_for_status()
+            data = resp.json()
+
+        # MCP response: {"result": {"tools": [{"name": "...", ...}, ...]}}
+        tools_list = data.get("result", {}).get("tools", [])
+        names = {t["name"] for t in tools_list if "name" in t}
+        logger.info(
+            "MCP tool discovery: %d tools available on %s",
+            len(names), server_url,
+        )
+        return names
+    except Exception as exc:
+        logger.warning(
+            "MCP tool discovery failed (%s) — skipping validation. "
+            "Agents will still be created, but misconfigured mcp_tools "
+            "references will only fail at runtime.",
+            exc,
+        )
+        return set()
+
+
+async def validate_mcp_tool_references(
+    agents_cfg: list[dict[str, Any]],
+    url: str | None = None,
+) -> set[str]:
+    """Validate that all ``mcp_tools`` references in agent configs exist on the MCP server.
+
+    Returns the set of available MCP tool names (empty if discovery failed).
+    Logs warnings for each unknown tool reference.
+    """
+    available = await discover_mcp_tools(url)
+    if not available:
+        return available  # discovery failed; nothing to validate against
+
+    for agent_cfg in agents_cfg:
+        tool_mode = agent_cfg.get("tool_mode", "none")
+        if tool_mode != "filtered":
+            continue
+        agent_name = agent_cfg["name"]
+        mcp_tools = agent_cfg.get("mcp_tools", [])
+        for tool_name in mcp_tools:
+            if tool_name not in available:
+                logger.warning(
+                    "Agent '%s' references MCP tool '%s' which does not exist "
+                    "on the server. Available: %s",
+                    agent_name, tool_name, sorted(available),
+                )
+    return available

@@ -76,13 +76,43 @@ After collecting raw data, synthesize findings:
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════
 
-Return a condensed findings summary. Include:
+CRITICAL: You MUST end your response with a structured JSON block inside
+```json fences. Free-text summaries without a JSON block are INVALID.
 
-- Which ERs were fulfilled and which used existing signal data
-- Key metrics: impacted resources, duration, severity, regions, subscriptions
-- Pattern classification: localized / cross-subscription / cross-region / platform-wide
-- Load assessment (if applicable): spike vs sustained degradation
-- Preliminary relevance to the hypothesis (supports / inconclusive / weakens)
+Structure your response as:
 
-Keep the summary concise — the reasoner agent will do the deep interpretation.
-Focus on FACTS and METRICS, not speculation.
+[Brief narrative summary of findings — 3-5 sentences max]
+
+```json
+{
+  "er_results": [
+    {
+      "er_id": "ER-SLI-001 | ER-SLI-002 | ER-LOAD-001 | ER-LOAD-002",
+      "status": "collected | from_signal | unavailable",
+      "source": "tool_name or 'signal_data'",
+      "findings": {
+        "severity": "CRITICAL | HIGH | WARNING | NONE",
+        "impacted_resources": 0,
+        "duration_minutes": 0,
+        "regions_affected": [],
+        "subscriptions_affected": [],
+        "avg_value": null,
+        "min_value": null,
+        "pattern": "localized | cross-subscription | cross-region | platform-wide",
+        "load_assessment": "spike | sustained_degradation | normal | null"
+      },
+      "summary": "One-line finding"
+    }
+  ],
+  "preliminary_relevance": "supports | inconclusive | weakens",
+  "relevance_reasoning": "One sentence explaining why"
+}
+```
+
+Field rules:
+- er_results MUST contain one entry per ER-ID you were asked to collect.
+- Set status="from_signal" for ERs fulfilled by existing signal data.
+- Set status="unavailable" with summary explaining why if collection failed.
+- Use null for numeric fields where data is not available.
+- Keep the narrative summary ABOVE the JSON block brief — the JSON is the
+  authoritative output. The reasoner will interpret it.

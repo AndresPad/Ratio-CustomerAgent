@@ -1,6 +1,9 @@
-declare query_parameters (serviceTreeId:string, customerName:string, startTime:datetime, endTime:datetime, endTime:datetime);
-// let startTime = ago(30m);
-// let endTime = now();
+declare query_parameters (serviceTreeId:string, customerName:string, startTime:datetime, endTime:datetime);
+// Clamp window to max 1 hour to avoid resource-exhaustion on large datasets
+let effectiveEndTime = iff((endTime - startTime) > 1h, startTime + 1h, endTime);
+let SliCategory = cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').ServiceSliCategories
+| project ServiceTreeId, SliId, SliCategory
+;
 let tableSLIMapping =
 cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').external_table('External_SliIdToSliTableMapping')
     | where isnotempty(SliTableName)
@@ -17,11 +20,12 @@ let subscriptionList =
 let ImpactedResource =
     tableSLIMapping
     | where ServiceTreeId ==  serviceTreeId//'734379f9-2d2c-48d4-a52a-5c509f699de4'
-    | project SliTableName, Target
+    | join kind=leftouter SliCategory on $left.SliId == $right.SliId and $left.ServiceTreeId == $right.ServiceTreeId
+    | project SliTableName, Target, SliCategory
     | order by SliTableName asc
     | extend formatted = strcat('(cluster("bdssli.westcentralus").database("slidata").["', SliTableName, '"]',
         " | where EndTimeUtc >= datetime(", format_datetime(startTime, 'yyyy-MM-dd HH:mm:ss'), ")",
-        " and EndTimeUtc < datetime(", format_datetime(endTime, 'yyyy-MM-dd HH:mm:ss'), ")",
+        " and EndTimeUtc < datetime(", format_datetime(effectiveEndTime, 'yyyy-MM-dd HH:mm:ss'), ")",
         " and Value < ", todecimal(Target),
         ' | extend SubscriptionId = extract(@"/subscriptions/([^/]+)", 1, CustomerResourceId)',
         ' | extend Region = tolower(replace_string(iif(LocationId startswith "ms-loc",extract(@"^ms-loc://az/\\w*/([^/?]+)", 1, LocationId),LocationId)," ", ""))',
@@ -66,7 +70,7 @@ let resourceImpacts =
         ImpactDurationMin = datetime_diff('minute', max(EndTimeUtc), min(StartTimeUtc)),
         AvgValue = avg(Value),
         MinValue = min(Value)
-        by CustomerResourceId, CustomerName, SLO_SliId, Region, Tenant, IslandId
+        by CustomerResourceId, CustomerName, SLO_SliId, SliCategory, Region, Tenant, IslandId
     | project-away IslandId
 ;
 // Step 4: Extract SubscriptionId and summarize per subscription
@@ -80,5 +84,5 @@ resourceImpacts
     AvgValueAcrossWindows = avg(AvgValue),
     MinValueAcrossWindows = min(MinValue)
     // ImpactWindows = count()
-    by CustomerName, SubscriptionId, Region, SLO_SliId
+    by CustomerName, SubscriptionId, Region, SLO_SliId, SliCategory
 | order by TotalImpactDurationMin desc

@@ -1,0 +1,23 @@
+{
+  "name": "SQL Control Plane",
+  "service_tree_id": "a7a7c4d7-03e5-4816-add0-30646ccee978",
+  "category": "database_control",
+  "impact_description": "Handles SQL database control plane operations. Degradation causes SQL DB creation/resize failures and AllocationFailed errors.",
+  "sli_symptoms": [
+    {
+      "sliId": "Outage SLOs for SQL Control Plane.SQL Control Plane Outage Confidence.Signal",
+      "sli_category": "availability",
+      "symptoms": ["All SQL DB management operations unavailable", "Management API and portal errors observed"]
+    },
+    {
+      "sliId": "SQL Control Plane Response Code.SQL Control Plane Provisioning Response Code.Signal",
+      "sli_category": "management",
+      "symptoms": ["Management API and portal errors observed"]
+    },
+    {
+      "sliId": "SQL Control Plane Success Rate.SQL Control Plane CRUD Success Rate.Signal",
+      "sli_category": "management",
+      "symptoms": ["Management API and portal errors observed", "SQL DB management operations fail or are incomplete"]
+    }
+  ]
+}

@@ -15,4 +15,6 @@ class InvestigationContextModel(BaseModel):
     incident_id: str = ""
     ticket_ids: list[str] = Field(default_factory=list)
     severity: str = ""
+    start_time: str = ""
+    end_time: str = ""
     extra: dict[str, Any] = Field(default_factory=dict)

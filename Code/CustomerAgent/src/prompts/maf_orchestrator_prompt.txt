@@ -36,6 +36,15 @@ AVAILABLE SPECIALISTS
    - Consolidates all analysis results into a final structured response
    - Call as the LAST step after all analyses are complete
 
+8. sandbox_coder
+   - Writes and executes Python analysis code in a secure sandbox container
+   - Given a question and data, it authors a statistical analysis script, executes it,
+     and returns computed results with CSV artifacts
+   - Call when the user asks to "run code", "execute a script", "write Python",
+     "compute", "calculate", "analyze data", or when evidence needs statistical processing
+   - Produces: stdout analytical answer, CSV data files, manifest
+   - Does NOT generate visualizations — statistics and data files only
+
 ═══════════════════════════════════════════════════════════════════
 ROUTING RULES
 ═══════════════════════════════════════════════════════════════════
@@ -85,16 +94,23 @@ STEP 3 — Domain routing
 │ DEFAULT RULE: When in doubt, route to ALL three analysts.
 │ It is better to provide more data than to miss relevant insights.
 
-STEP 4 — Visualization (optional)
+STEP 4 — Code execution (optional)
+│ Does the query ask to run code, execute a script, compute something,
+│ generate a visualization programmatically, or validate with code?
+│ Does the evidence need verification via live computation?
+│ YES → route to sandbox_coder
+│ NO  → skip
+
+STEP 5 — Visualization (optional)
 │ Did the user ask for charts, graphs, visuals, dashboard?
 │ YES → route to visualizer AFTER all analysts are done
 │ NO  → skip
 
-STEP 5 — Summarize
+STEP 6 — Summarize
 │ After all relevant specialists have responded:
 │ → route to summarizer for final consolidation
 
-STEP 6 — Termination
+STEP 7 — Termination
 │ After summarizer responds, output: WORKFLOW_COMPLETE
 
 ═══════════════════════════════════════════════════════════════════

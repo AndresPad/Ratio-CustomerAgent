@@ -28,6 +28,9 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_SRC_DIR, "..", ".env"))
 
+# Apply framework compatibility patches early (before any agent code runs)
+import core.compat  # noqa: F401, E402
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -44,11 +47,14 @@ from helper.agent_logger import (
     generate_xcv,
     get_current_xcv,
     set_current_xcv,
+    set_current_service_tree_id,
     set_current_tool_stage,
+    stamp_event,
     subscribe_events,
     unsubscribe_events,
 )
 from a2a.registry import register_a2a_routes
+from server.config_api import router as config_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -77,6 +83,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Config CRUD API ──────────────────────────────────────────────────────────
+app.include_router(config_router)
+
 # ── Lazy-initialized globals ─────────────────────────────────────────────────
 _workflow = None
 _agents = None
@@ -84,6 +93,7 @@ _config = None
 _capture_middleware = None
 _eval_middleware = None
 _injection_middleware = None
+_tool_injection_middleware = None
 _llm_logging_middleware = None
 _agent_prompts: dict[str, str] = {}
 _init_lock = asyncio.Lock()
@@ -92,14 +102,31 @@ _a2a_registered = False
 
 async def _get_workflow():
     """Lazy-init: load config, create agents, build workflow, register A2A routes."""
-    global _workflow, _agents, _config, _capture_middleware, _eval_middleware, _injection_middleware, _llm_logging_middleware, _agent_prompts, _a2a_registered
+    global _workflow, _agents, _config, _capture_middleware, _eval_middleware, _injection_middleware, _tool_injection_middleware, _llm_logging_middleware, _agent_prompts, _a2a_registered
     async with _init_lock:
         if _workflow is not None:
             return _workflow
         logger.info("Initializing MAF GroupChat workflow...")
         _config = load_config()
-        _agents, _capture_middleware, _eval_middleware, _injection_middleware, _llm_logging_middleware, _agent_prompts = await create_agents(_config)
-        _workflow = build_group_chat_workflow(_agents, _config, _capture_middleware, _eval_middleware, _injection_middleware, _llm_logging_middleware, _agent_prompts)
+        (
+            _agents,
+            _capture_middleware,
+            _eval_middleware,
+            _injection_middleware,
+            _tool_injection_middleware,
+            _llm_logging_middleware,
+            _agent_prompts,
+        ) = await create_agents(_config)
+        _workflow = build_group_chat_workflow(
+            _agents,
+            _config,
+            _capture_middleware,
+            _eval_middleware,
+            _injection_middleware,
+            _tool_injection_middleware,
+            _llm_logging_middleware,
+            _agent_prompts,
+        )
         logger.info("Workflow initialized with %d agents", len(_agents))
 
         # Register A2A routes for each agent (once)
@@ -262,6 +289,8 @@ class RunRequest(BaseModel):
     """
     customer_name: str | None = None
     service_tree_id: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
 
 
 class RunServicesRequest(BaseModel):
@@ -416,7 +445,10 @@ async def run_pipeline(req: RunRequest):
         Final frame is "data: [DONE]\\n\\n".
     """
     # ── Lazy import to avoid circular deps at module load ────────────
-    from core.services.signals.signal_builder import evaluate_signals
+    from core.services.signals.signal_builder import (
+        evaluate_signals_stream,
+        load_monitoring_context,
+    )
     from core.services.investigation.investigation_runner import run_investigation
 
     # ── Generate XCV and subscribe to AgentLogger events ─────────────
@@ -425,174 +457,299 @@ async def run_pipeline(req: RunRequest):
     event_queue = subscribe_events(xcv)
 
     # ── Build monitoring context override if customer provided ───────
+    # Inherit the matching entry from monitoring_context.json so we keep
+    # support_product_names / owning_tenant_names / lookbacks. Falling back
+    # to a bare {customer_name, service_tree_ids} object only when the
+    # customer is not present in the file.
     monitoring_context = None
     if req.customer_name:
-        target: dict = {"customer_name": req.customer_name}
+        base_ctx = load_monitoring_context()
+        matched_targets = [
+            t for t in base_ctx.get("targets", [])
+            if t.get("customer_name", "").lower() == req.customer_name.lower()
+        ]
+
         if req.service_tree_id:
-            target["service_tree_ids"] = [{"id": req.service_tree_id, "name": ""}]
-        monitoring_context = {"targets": [target]}
+            narrowed = []
+            for t in matched_targets:
+                entries = [
+                    e for e in t.get("service_tree_ids", [])
+                    if (isinstance(e, dict) and e.get("id") == req.service_tree_id)
+                    or (isinstance(e, str) and e == req.service_tree_id)
+                ]
+                if entries:
+                    narrowed.append({**t, "service_tree_ids": entries})
+            matched_targets = narrowed or [
+                {"customer_name": req.customer_name,
+                 "service_tree_ids": [{"id": req.service_tree_id, "name": ""}]}
+            ]
+
+        if matched_targets:
+            monitoring_context = {**base_ctx, "targets": matched_targets}
+        else:
+            target: dict = {"customer_name": req.customer_name}
+            if req.service_tree_id:
+                target["service_tree_ids"] = [{"id": req.service_tree_id, "name": ""}]
+            monitoring_context = {"targets": [target]}
+
+    # Inject explicit time window if provided
+    if req.start_time or req.end_time:
+        if monitoring_context is None:
+            monitoring_context = load_monitoring_context()
+        if req.start_time:
+            monitoring_context["start_time"] = req.start_time
+        if req.end_time:
+            monitoring_context["end_time"] = req.end_time
 
     async def pipeline_generator():
-        """Run the pipeline in the background and yield AgentLogger events
-        plus investigation-level events as SSE frames.
+        """Run the pipeline and yield AgentLogger events plus investigation
+        events as SSE frames.
 
-        The generator:
-          1. Sends a 'pipeline_started' event immediately
-          2. Kicks off evaluate_signals() as a background task
-          3. Drains the AgentLogger subscriber queue in real time
-          4. When signal evaluation finishes, streams investigation events
-          5. Sends 'pipeline_complete' or 'pipeline_error' at the end
-          6. Always cleans up the subscriber queue
+        Streaming architecture:
+          1. Signal evaluation runs all services in parallel and yields each
+             SignalBuilderResult as soon as it completes.
+          2. As each actionable result arrives, its investigation starts
+             immediately — no waiting for the slowest service.
+          3. AgentLogger events are drained continuously via a background
+             task. Everything is multiplexed through a single output queue.
         """
-        try:
-            # ── Ensure the pipeline XCV is set in this generator's context ──
-            # Starlette may iterate the async generator in a context that
-            # doesn't inherit the ContextVar set in run_pipeline().
-            set_current_xcv(xcv)
+        def _stamp(event: dict) -> str:
+            """Format *event* as an SSE data frame.
 
-            # ── Emit pipeline start ──────────────────────────────────
-            yield f"data: {json.dumps({'type': 'pipeline_started', 'xcv': xcv})}\n\n"
+            Preserve seq/created_at if already stamped at creation; otherwise
+            stamp now (for ad-hoc pipeline-level events).
+            """
+            if "seq" not in event:
+                stamp_event(event)
+            event["pipeline_xcv"] = xcv
+            return f"data: {json.dumps(event, default=str)}\n\n"
 
-            # ── Stage 1: Signal evaluation ───────────────────────────
-            # Run in a background task so we can drain the event queue
-            # concurrently as AgentLogger emits events.
-            signal_results = []
-            eval_done = asyncio.Event()
-            eval_error: list[str] = []
+        # Sentinel types for the output queue
+        _SIGNAL_RESULT = "_signal_result"
+        _INVESTIGATION_EVENT = "_inv_event"
+        _LOGGER_EVENT = "_logger_event"
+        _EVAL_DONE = "_eval_done"
+        _EVAL_ERROR = "_eval_error"
+        _INV_DONE = "_inv_done"
+        _INV_ERROR = "_inv_error"
 
-            async def _evaluate():
-                """Background task: run evaluate_signals and store results."""
-                try:
-                    # Explicitly propagate the parent XCV into this task.
-                    # asyncio.create_task() copies the context, but in some
-                    # Starlette/uvicorn scenarios the ContextVar may not
-                    # survive into the new task.  Setting it here guarantees
-                    # that every _emit() / get_current_xcv() call inside
-                    # evaluate_signals() uses the same XCV the UI displays.
-                    set_current_xcv(xcv)
-                    set_current_tool_stage("signal_building")
-                    nonlocal signal_results
-                    signal_results = await evaluate_signals(
-                        monitoring_context=monitoring_context
-                    )
-                except Exception as exc:
-                    eval_error.append(str(exc))
-                    logger.exception("Signal evaluation failed: %s", exc)
-                finally:
-                    set_current_tool_stage(None)
-                    eval_done.set()
+        output_queue: asyncio.Queue = asyncio.Queue()
+        active_investigations = 0
+        all_results: list = []
+        eval_finished = False
 
-            eval_task = asyncio.create_task(_evaluate())
+        # ── Event filtering ──────────────────────────────────────────
+        # Verbose events that pollute the UI stream but stay in App Insights.
+        _DROP_LOGGER_TYPES = {"LLMCall", "InvestigationError", "OutputParsed"}
+        _DROP_NARRATOR_TYPES = {"AgentInvoked", "AgentResponse", "AgentPromptUsed"}
+        _DROP_INV_TYPES = {
+            "investigation_agent_chunk",
+            "investigation_stall_warning",
+            "investigation_error",
+        }
 
-            # ── Drain AgentLogger events while signal eval runs ──────
-            while not eval_done.is_set():
-                try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
-                    event["pipeline_xcv"] = xcv
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
+        def _should_drop_logger(event: dict) -> bool:
+            etype = event.get("type") or event.get("EventName")
+            if etype in _DROP_LOGGER_TYPES:
+                return True
+            if event.get("Agent") == "narrator" and etype in _DROP_NARRATOR_TYPES:
+                return True
+            return False
 
-            # Drain any remaining events after eval completes
-            while not event_queue.empty():
-                event = event_queue.get_nowait()
-                event["pipeline_xcv"] = xcv
-                yield f"data: {json.dumps(event, default=str)}\n\n"
-
-            await eval_task  # Ensure task is fully done
-
-            if eval_error:
-                yield f"data: {json.dumps({'type': 'pipeline_error', 'xcv': xcv, 'error': eval_error[0]})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            # ── Emit signal evaluation summary ───────────────────────
-            result_summaries = []
-            for r in (signal_results or []):
-                result_summaries.append({
-                    "customer_name": r.customer_name,
-                    "service_tree_id": r.service_tree_id,
-                    "action": r.action,
-                    "signal_count": len(r.all_activated_signals),
-                    "compound_count": len(r.activated_compounds),
-                })
-            yield f"data: {json.dumps({'type': 'signal_evaluation_complete', 'xcv': xcv, 'results': result_summaries})}\n\n"
-
-            # ── Stage 2: Run investigations for actionable results ───
-            actionable = [r for r in (signal_results or []) if r.action == "invoke_group_chat"]
-
-            if not actionable:
-                yield f"data: {json.dumps({'type': 'pipeline_complete', 'xcv': xcv, 'message': 'No investigations triggered', 'investigation_count': 0})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            yield f"data: {json.dumps({'type': 'investigations_starting', 'xcv': xcv, 'count': len(actionable)})}\n\n"
-
-            # Run investigations sequentially, all under the parent XCV
-            for r in actionable:
-                # Ensure the parent XCV is propagated into the investigation.
-                # The signal builder result should already carry it, but
-                # stamp it explicitly so investigation_runner never falls
-                # back to generate_xcv().
+        async def _signal_eval_producer():
+            """Stream signal eval results and spawn investigations."""
+            nonlocal active_investigations, eval_finished
+            try:
                 set_current_xcv(xcv)
-                if not r.xcv:
-                    r.xcv = xcv
+                set_current_tool_stage("signal_building")
+                async for result in evaluate_signals_stream(
+                    monitoring_context=monitoring_context
+                ):
+                    all_results.append(result)
+                    await output_queue.put((_SIGNAL_RESULT, result))
+
+                    if result.action == "invoke_group_chat":
+                        active_investigations += 1
+                        asyncio.create_task(_run_one_investigation(result))
+            except Exception as exc:
+                logger.exception("Signal evaluation failed: %s", exc)
+                await output_queue.put((_EVAL_ERROR, str(exc)))
+                return
+            finally:
+                set_current_tool_stage(None)
+                eval_finished = True
+                await output_queue.put((_EVAL_DONE, None))
+
+        async def _run_one_investigation(r):
+            """Run a single investigation and push events to output_queue."""
+            nonlocal active_investigations
+            service_xcv = r.xcv or xcv
+            try:
+                set_current_xcv(service_xcv)
+                set_current_service_tree_id(r.service_tree_id)
                 logger.info(
                     "Pre-investigation XCV check: pipeline_xcv=%s, result.xcv=%s, contextvar=%s",
                     xcv, r.xcv, get_current_xcv(),
                 )
-                # Investigation runner yields its own events; forward them
+                async for inv_event in run_investigation(r):
+                    inv_event['service_xcv'] = service_xcv
+                    inv_event['service_tree_id'] = r.service_tree_id
+                    inv_event['service_name'] = getattr(r, 'service_name', '')
+                    stamp_event(inv_event)
+                    await output_queue.put((_INVESTIGATION_EVENT, inv_event))
+            except Exception as inv_exc:
+                logger.exception("Investigation failed for %s: %s", r.customer_name, inv_exc)
+                AgentLogger.get_instance().log_investigation_error(
+                    xcv=service_xcv,
+                    investigation_id=getattr(r, 'investigation_id', ''),
+                    error=str(inv_exc),
+                )
+                await output_queue.put((_INV_ERROR, stamp_event({
+                    'type': 'investigation_error',
+                    'service_xcv': service_xcv,
+                    'service_tree_id': r.service_tree_id,
+                    'service_name': getattr(r, 'service_name', ''),
+                    'error': str(inv_exc),
+                })))
+            finally:
+                active_investigations -= 1
+                await output_queue.put((_INV_DONE, r))
+
+        async def _logger_drain():
+            """Continuously drain AgentLogger events until pipeline ends."""
+            while True:
                 try:
-                    async for inv_event in run_investigation(r):
-                        # Skip verbose chunk events from UI stream
-                        if inv_event.get("type") == "investigation_agent_chunk":
-                            continue
-                        # Filter verbose events from UI stream (still logged to App Insights)
-                        if inv_event.get("type") in ("investigation_stall_warning", "investigation_error"):
-                            continue
-                        inv_event["pipeline_xcv"] = xcv
-                        yield f"data: {json.dumps(inv_event, default=str)}\n\n"
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
+                    await output_queue.put((_LOGGER_EVENT, event))
+                except asyncio.TimeoutError:
+                    await asyncio.sleep(0)
 
-                        # Also drain any AgentLogger events that accumulated
-                        while not event_queue.empty():
-                            logger_event = event_queue.get_nowait()
-                            # Filter verbose events from UI stream
-                            if logger_event.get("EventName") in ("LLMCall", "InvestigationError"):
-                                continue
-                            logger_event["pipeline_xcv"] = xcv
-                            yield f"data: {json.dumps(logger_event, default=str)}\n\n"
-                except Exception as inv_exc:
-                    logger.exception("Investigation generator raised for %s: %s", r.customer_name, inv_exc)
-                    AgentLogger.get_instance().log_investigation_error(
-                        xcv=xcv,
-                        investigation_id=getattr(r, 'investigation_id', ''),
-                        error=str(inv_exc),
-                    )
-                    yield f"data: {json.dumps({'type': 'investigation_error', 'xcv': xcv, 'error': str(inv_exc)}, default=str)}\n\n"
+        tracker = AgentLogger.get_instance()
+        eval_error_msg: str | None = None
 
-            # ── Final drain of any remaining logger events ───────────
+        try:
+            set_current_xcv(xcv)
+            tracker.start_request_span(xcv, query="")
+            yield _stamp({'type': 'pipeline_started', 'xcv': xcv})
+            yield _stamp({'type': 'investigation_milestone', 'text': 'Starting signal evaluation…', 'icon': 'search'})
+
+            # Start background producers
+            eval_task = asyncio.create_task(_signal_eval_producer())
+            drain_task = asyncio.create_task(_logger_drain())
+
+            eval_complete_emitted = False
+            investigations_started = False
+            investigation_count = 0
+
+            while True:
+                try:
+                    msg_type, payload = await asyncio.wait_for(output_queue.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    if eval_finished and active_investigations == 0:
+                        # Final drain
+                        while not output_queue.empty():
+                            msg_type, payload = output_queue.get_nowait()
+                            if msg_type == _LOGGER_EVENT:
+                                if _should_drop_logger(payload):
+                                    continue
+                                yield _stamp(payload)
+                            elif msg_type == _INVESTIGATION_EVENT:
+                                if payload.get("type") in _DROP_INV_TYPES:
+                                    continue
+                                yield _stamp(payload)
+                        break
+                    continue
+
+                if msg_type == _LOGGER_EVENT:
+                    if _should_drop_logger(payload):
+                        continue
+                    yield _stamp(payload)
+
+                elif msg_type == _SIGNAL_RESULT:
+                    result = payload
+                    if result.action == "invoke_group_chat":
+                        investigation_count += 1
+                        if not investigations_started:
+                            investigations_started = True
+                            yield _stamp({'type': 'investigations_starting', 'xcv': xcv, 'count': '(streaming)'})
+
+                elif msg_type == _INVESTIGATION_EVENT:
+                    if payload.get("type") in _DROP_INV_TYPES:
+                        continue
+                    yield _stamp(payload)
+
+                elif msg_type == _INV_ERROR:
+                    payload.setdefault('xcv', payload.get('service_xcv', ''))
+                    yield _stamp(payload)
+
+                elif msg_type == _INV_DONE:
+                    pass  # tracked via active_investigations counter
+
+                elif msg_type == _EVAL_DONE:
+                    if not eval_complete_emitted:
+                        eval_complete_emitted = True
+                        result_summaries = []
+                        for r in all_results:
+                            result_summaries.append({
+                                "customer_name": r.customer_name,
+                                "service_tree_id": r.service_tree_id,
+                                "service_name": getattr(r, 'service_name', ''),
+                                "service_xcv": r.xcv,
+                                "action": r.action,
+                                "signal_count": len(r.all_activated_signals),
+                                "compound_count": len(r.activated_compounds),
+                            })
+                        yield _stamp({'type': 'signal_evaluation_complete', 'xcv': xcv, 'results': result_summaries})
+                        total_signals = sum(s.get('signal_count', 0) for s in result_summaries)
+                        total_compounds = sum(s.get('compound_count', 0) for s in result_summaries)
+                        yield _stamp({'type': 'investigation_milestone', 'text': f'Collected {total_signals} signals, {total_compounds} compound patterns', 'icon': 'check'})
+
+                        if investigation_count == 0 and active_investigations == 0:
+                            yield _stamp({'type': 'pipeline_complete', 'xcv': xcv, 'message': 'No investigations triggered', 'investigation_count': 0})
+                            yield "data: [DONE]\n\n"
+                            return
+
+                elif msg_type == _EVAL_ERROR:
+                    eval_error_msg = payload
+                    yield _stamp({'type': 'pipeline_error', 'xcv': xcv, 'error': eval_error_msg})
+                    yield "data: [DONE]\n\n"
+                    return
+
+            # Ensure eval task completed
+            await eval_task
+
+            # Cancel the logger drain
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
+
+            # Final drain of logger events that arrived after cancellation
             while not event_queue.empty():
                 event = event_queue.get_nowait()
-                if event.get("EventName") in ("LLMCall", "InvestigationError"):
+                if _should_drop_logger(event):
                     continue
-                event["pipeline_xcv"] = xcv
-                yield f"data: {json.dumps(event, default=str)}\n\n"
+                yield _stamp(event)
 
-            yield f"data: {json.dumps({'type': 'pipeline_complete', 'xcv': xcv, 'investigation_count': len(actionable)})}\n\n"
+            yield _stamp({'type': 'pipeline_complete', 'xcv': xcv, 'investigation_count': investigation_count})
             yield "data: [DONE]\n\n"
 
         except Exception as exc:
             logger.exception("Pipeline generator failed: %s", exc)
-            yield f"data: {json.dumps({'type': 'pipeline_error', 'xcv': xcv, 'error': str(exc)})}\n\n"
+            eval_error_msg = eval_error_msg or str(exc)
+            yield _stamp({'type': 'pipeline_error', 'xcv': xcv, 'error': str(exc)})
             yield "data: [DONE]\n\n"
 
         finally:
-            # ── Flush pending telemetry so logs appear in App Insights ─
             try:
-                AgentLogger.get_instance().flush()
+                tracker.end_request_span(
+                    status="error" if eval_error_msg else "complete",
+                    error=eval_error_msg or "",
+                )
+                tracker.flush()
             except Exception:
                 logger.debug("Non-critical: flush failed", exc_info=True)
-            # ── Always clean up the subscriber queue ─────────────────
             unsubscribe_events(xcv)
 
     return StreamingResponse(

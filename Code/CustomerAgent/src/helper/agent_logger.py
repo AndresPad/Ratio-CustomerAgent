@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -23,7 +24,8 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
-# from opentelemetry.trace import StatusCode  # [Custom Foundry spans — commented out]
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode, Span, INVALID_SPAN
 
 from dotenv import load_dotenv
 
@@ -59,6 +61,11 @@ def _load_agent_log_config() -> None:
     try:
         with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
+        from core.models.config.agents import AgentsFileConfig
+        try:
+            AgentsFileConfig.model_validate(data)
+        except Exception as ve:
+            logger.warning("agents_config.json validation failed in logger: %s", ve)
         for agent in data.get("agents", []):
             name = agent.get("name", "")
             if name:
@@ -79,11 +86,26 @@ _load_agent_log_config()
 _current_xcv: ContextVar[str | None] = ContextVar(
     "current_xcv", default=None
 )
+# ── Context variable for the service being evaluated / investigated ───────
+_current_service_tree_id: ContextVar[str | None] = ContextVar(
+    "current_service_tree_id", default=None
+)
 # ── Context variable for pipeline stage (tool call distinction) ───────
 # Values: "signal_building", "investigation:<phase>" (e.g. "investigation:collecting")
 # Optionally suffixed with hypothesis: "investigation:collecting:HYP-001"
 _current_tool_stage: ContextVar[str | None] = ContextVar(
     "current_tool_stage", default=None
+)
+
+# ── Context variables for OTel span hierarchy (request → investigation → hypothesis) ──
+_current_request_span: ContextVar[Span | None] = ContextVar(
+    "current_request_span", default=None
+)
+_current_investigation_span: ContextVar[Span | None] = ContextVar(
+    "current_investigation_span", default=None
+)
+_current_hypothesis_span: ContextVar[Span | None] = ContextVar(
+    "current_hypothesis_span", default=None
 )
 
 def get_current_xcv() -> str | None:
@@ -94,6 +116,16 @@ def get_current_xcv() -> str | None:
 def set_current_xcv(xcv: str) -> None:
     """Bind an XCV to the current async context."""
     _current_xcv.set(xcv)
+
+
+def get_current_service_tree_id() -> str | None:
+    """Return the service_tree_id bound to the current async context."""
+    return _current_service_tree_id.get()
+
+
+def set_current_service_tree_id(service_tree_id: str | None) -> None:
+    """Bind a service_tree_id to the current async context."""
+    _current_service_tree_id.set(service_tree_id)
 
 
 def get_current_tool_stage() -> str | None:
@@ -113,6 +145,26 @@ def set_current_tool_stage(stage: str | None) -> None:
 def generate_xcv() -> str:
     """Generate a new unique XCV (UUID4)."""
     return str(uuid.uuid4())
+
+
+# ── Global monotonic event sequence counter ──────────────────────────────────
+# Every event (investigation yield, AgentLogger SSE push, pipeline milestone)
+# gets a unique, globally increasing seq number at *creation* time so that the
+# UI can render events in true chronological order regardless of when they
+# arrive over the SSE stream.
+_global_seq = itertools.count(1)
+
+
+def stamp_event(event: dict) -> dict:
+    """Stamp ``seq`` and ``created_at`` on *event* at its point of creation.
+
+    Call this as early as possible — when the event dict is first built —
+    so that the sequence number reflects real occurrence order, not the
+    moment it exits the SSE output queue.
+    """
+    event["seq"] = next(_global_seq)
+    event.setdefault("created_at", time.time())
+    return event
 
 
 # ── Real-time UI event queue ─────────────────────────────────────────────────
@@ -163,14 +215,12 @@ class AgentLogger:
         # ── Application Insights (log records) ────────────────────────────
         self._tc = None
         self._provider = None
-        # ── Foundry tracing (OTel spans) — custom spans commented out ────
-        # self._tracer = None
-        # self._trace_provider = None
-        # self._request_spans: dict[str, Any] = {}   # xcv → active request span
-        # self._agent_spans: dict[str, Any] = {}     # xcv → active agent span
+        # ── OTel tracer for request/investigation/hypothesis spans ────────
+        self._tracer: trace.Tracer | None = None
+        self._trace_provider = None
 
         self._init_app_insights()
-        # self._init_foundry_tracing()  # [Custom Foundry spans — replaced by SDK]
+        self._init_tracer()
         self._init_sdk_observability()
 
     @classmethod
@@ -267,6 +317,160 @@ class AgentLogger:
         except Exception as exc:
             logger.warning("Failed to initialize SDK observability: %s", exc)
 
+    # ── OTel tracer for investigation span hierarchy ─────────────────
+
+    def _init_tracer(self) -> None:
+        """Initialize an OTel TracerProvider that exports spans to App Insights.
+
+        Creates a dedicated TracerProvider so our request/investigation/
+        hypothesis spans don't interfere with the MAF SDK's auto-
+        instrumentation provider (configured in _init_sdk_observability).
+        """
+        connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "")
+        if not connection_string:
+            logger.info("Tracer disabled: APPLICATIONINSIGHTS_CONNECTION_STRING not set")
+            return
+
+        try:
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            from opentelemetry.sdk.resources import Resource
+            from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
+
+            resource = Resource.create({"service.name": "customer-agent"})
+            provider = TracerProvider(resource=resource)
+            provider.add_span_processor(
+                BatchSpanProcessor(
+                    AzureMonitorTraceExporter(connection_string=connection_string),
+                )
+            )
+            self._trace_provider = provider
+            self._tracer = provider.get_tracer("customer-agent.investigation")
+            logger.info("OTel tracer initialized for investigation spans")
+        except ImportError:
+            logger.warning(
+                "opentelemetry-sdk or azure-monitor-opentelemetry-exporter "
+                "not installed; investigation spans disabled."
+            )
+        except Exception as exc:
+            logger.warning("Failed to initialize OTel tracer: %s", exc)
+
+    # ── Span lifecycle: request → investigation → hypothesis ─────────
+
+    def start_request_span(self, xcv: str, query: str = "") -> None:
+        """Start the root span for a user request.
+
+        All child spans (investigation, hypothesis) will nest under this.
+        The XCV is attached as a span attribute so App Insights queries
+        can join custom events with spans.
+        """
+        if not self._tracer:
+            return
+        span = self._tracer.start_span(
+            "request",
+            attributes={"xcv": xcv, "query": query[:500]},
+        )
+        _current_request_span.set(span)
+
+    def end_request_span(self, status: str = "complete", error: str = "") -> None:
+        """End the current request span."""
+        span = _current_request_span.get()
+        if span is None or span is INVALID_SPAN:
+            return
+        if error:
+            span.set_status(StatusCode.ERROR, error[:500])
+            span.set_attribute("error", error[:500])
+        else:
+            span.set_status(StatusCode.OK)
+        span.set_attribute("status", status)
+        span.end()
+        _current_request_span.set(None)
+
+    def start_investigation_span(
+        self, investigation_id: str, customer_name: str = "", service_tree_id: str = "",
+    ) -> None:
+        """Start a child span for one investigation under the request span."""
+        if not self._tracer:
+            return
+        parent_span = _current_request_span.get()
+        ctx = trace.set_span_in_context(parent_span) if parent_span else None
+        span = self._tracer.start_span(
+            "investigation",
+            context=ctx,
+            attributes={
+                "investigation.id": investigation_id,
+                "customer.name": customer_name,
+                "service_tree_id": service_tree_id,
+                "xcv": get_current_xcv() or "",
+            },
+        )
+        _current_investigation_span.set(span)
+
+    def end_investigation_span(self, error: str = "") -> None:
+        """End the current investigation span."""
+        # First, close any open hypothesis span
+        self.end_hypothesis_span()
+        span = _current_investigation_span.get()
+        if span is None or span is INVALID_SPAN:
+            return
+        if error:
+            span.set_status(StatusCode.ERROR, error[:500])
+            span.set_attribute("error", error[:500])
+        else:
+            span.set_status(StatusCode.OK)
+        span.end()
+        _current_investigation_span.set(None)
+
+    def start_hypothesis_span(self, hypothesis_id: str, statement: str = "") -> None:
+        """Start a child span for one hypothesis under the investigation span.
+
+        Automatically ends any previously open hypothesis span first.
+        """
+        if not self._tracer:
+            return
+        # End previous hypothesis span if still open
+        self.end_hypothesis_span()
+        parent_span = _current_investigation_span.get()
+        ctx = trace.set_span_in_context(parent_span) if parent_span else None
+        span = self._tracer.start_span(
+            "hypothesis",
+            context=ctx,
+            attributes={
+                "hypothesis.id": hypothesis_id,
+                "hypothesis.statement": statement[:500],
+                "xcv": get_current_xcv() or "",
+            },
+        )
+        _current_hypothesis_span.set(span)
+
+    def end_hypothesis_span(self, determination: str = "", error: str = "") -> None:
+        """End the current hypothesis span."""
+        span = _current_hypothesis_span.get()
+        if span is None or span is INVALID_SPAN:
+            return
+        if determination:
+            span.set_attribute("hypothesis.determination", determination)
+        if error:
+            span.set_status(StatusCode.ERROR, error[:500])
+            span.set_attribute("error", error[:500])
+        else:
+            span.set_status(StatusCode.OK)
+        span.end()
+        _current_hypothesis_span.set(None)
+
+    def _get_active_span_context(self) -> trace.Context | None:
+        """Return the OTel context for the most specific active span.
+
+        Priority: hypothesis > investigation > request.
+        This is used by _emit() to associate log records with the
+        correct span in App Insights.
+        """
+        for cv in (_current_hypothesis_span, _current_investigation_span, _current_request_span):
+            span = cv.get()
+            if span is not None and span is not INVALID_SPAN:
+                return trace.set_span_in_context(span)
+        return None
+
     # ── Custom Foundry span code (commented out — replaced by SDK) ───────
     #
     # def _init_foundry_tracing(self) -> None:
@@ -305,11 +509,9 @@ class AgentLogger:
         # Application Insights: flush log records
         if self._provider:
             self._provider.force_flush(timeout_millis)
-        # SDK observability: flush is handled by the SDK's own providers
-        # (configured in configure_otel_providers). No manual flush needed.
-        # # [Custom Foundry spans — commented out]
-        # if self._trace_provider:
-        #     self._trace_provider.force_flush(timeout_millis)
+        # Investigation spans: flush trace spans
+        if self._trace_provider:
+            self._trace_provider.force_flush(timeout_millis)
 
     def _emit(self, event_name: str, xcv: str, properties: dict[str, Any]) -> None:
         """Emit a structured event to App Insights and to the Python logger.
@@ -321,12 +523,16 @@ class AgentLogger:
         if not _LOGGING_ENABLED:
             return
 
+        # Auto-enrich with service_tree_id from ContextVar
+        svc_id = get_current_service_tree_id()
         props = {
             "xcv": xcv,
             "EventName": event_name,
             "Service": "AGENT_SERVER",
             **properties,
         }
+        if svc_id and "ServiceTreeId" not in props:
+            props["ServiceTreeId"] = svc_id
 
         # Always log locally
         logger.info("[%s] %s | %s | %s", xcv[:8], "AGENT_SERVER", event_name, _safe_summary(props))
@@ -341,7 +547,19 @@ class AgentLogger:
             else:
                 msg = "%s | %s | %s"
                 args = (event_name, "AGENT_SERVER", xcv)
-            self._tc.info(msg, *args, extra=props)
+            # Associate log record with the active investigation span so
+            # App Insights correlates logs → spans under one trace_id.
+            active_span = None
+            for cv in (_current_hypothesis_span, _current_investigation_span, _current_request_span):
+                s = cv.get()
+                if s is not None and s is not INVALID_SPAN:
+                    active_span = s
+                    break
+            if active_span is not None:
+                with trace.use_span(active_span, end_on_exit=False):
+                    self._tc.info(msg, *args, extra=props)
+            else:
+                self._tc.info(msg, *args, extra=props)
 
         # ── Push to real-time UI subscriber queues ─────────────────────
         # Broadcast to ALL active subscribers regardless of XCV, because
@@ -351,12 +569,13 @@ class AgentLogger:
         # This is non-blocking: if a queue is full we drop the event
         # rather than stalling the pipeline.
         if _event_subscribers:
-            ui_event = {
+            ui_event = stamp_event({
                 "type": event_name,
-                "timestamp": time.time(),
                 "source_xcv": xcv,
                 **properties,
-            }
+            })
+            if svc_id:
+                ui_event.setdefault("service_tree_id", svc_id)
             for sub_xcv, subscriber_queue in _event_subscribers.items():
                 try:
                     subscriber_queue.put_nowait(ui_event)
@@ -387,6 +606,14 @@ class AgentLogger:
         self._emit("WorkflowStarted", xcv, {
             "WorkflowType": workflow_type,
             "Participants": ", ".join(participants),
+        })
+
+    def emit_feature_flag_event(self, xcv: str, flag_name: str, enabled: bool, fallback: str) -> None:
+        """Emit a telemetry event when a feature flag overrides default behaviour."""
+        self._emit("FeatureFlagOverride", xcv, {
+            "FlagName": flag_name,
+            "Enabled": str(enabled),
+            "Fallback": fallback,
         })
 
     def log_prompt_loaded(self, agent_name: str, prompt_file: str, prompt_content: str) -> None:
@@ -506,9 +733,9 @@ class AgentLogger:
         input_text: str,
         http_status: int | None = None,
         response_body: str = "",
-        is_injection: bool = False,
-        confidence: float = 0,
-        category: str = "",
+        final_verdict: str = "SAFE",
+        reasons: list[str] | None = None,
+        api_latency_ms: float = 0,
         duration_ms: float = 0,
         error: str = "",
     ) -> None:
@@ -520,9 +747,9 @@ class AgentLogger:
             "InputText": _redact(input_text, log_content=li),
             "HttpStatus": http_status or 0,
             "ResponseBody": _redact(response_body, log_content=lo),
-            "IsInjection": is_injection,
-            "Confidence": confidence,
-            "Category": category,
+            "FinalVerdict": final_verdict,
+            "Reasons": reasons or [],
+            "ApiLatencyMs": round(api_latency_ms, 1),
             "DurationMs": round(duration_ms, 1),
             "Error": error,
         })
@@ -820,6 +1047,7 @@ class AgentLogger:
         old_status: str,
         new_status: str,
         confidence: float = 0.0,
+        statement: str = "",
     ) -> None:
         self._emit("HypothesisTransition", xcv, {
             "InvestigationId": investigation_id,
@@ -827,6 +1055,7 @@ class AgentLogger:
             "OldStatus": old_status,
             "NewStatus": new_status,
             "Confidence": round(confidence, 4),
+            "Statement": statement,
         })
 
     def log_hypothesis_selected(
@@ -851,6 +1080,44 @@ class AgentLogger:
             "EvidenceNeeded": evidence_needed,
             "Rank": rank,
             "TotalHypotheses": total_hypotheses,
+        })
+
+    def log_agent_retry(
+        self,
+        xcv: str,
+        agent_name: str,
+        attempt: int,
+        max_retries: int,
+        reason: str,
+        investigation_id: str = "",
+        phase: str = "",
+        backoff_seconds: float = 0,
+    ) -> None:
+        self._emit("AgentRetry", xcv, {
+            "Agent": agent_name,
+            "Attempt": attempt,
+            "MaxRetries": max_retries,
+            "Reason": reason,
+            "InvestigationId": investigation_id,
+            "Phase": phase,
+            "BackoffSeconds": round(backoff_seconds, 2),
+        })
+
+    def log_oscillation_detected(
+        self,
+        xcv: str,
+        pattern: str,
+        repeat_count: int,
+        intervention: str,
+        investigation_id: str = "",
+        phase: str = "",
+    ) -> None:
+        self._emit("OscillationDetected", xcv, {
+            "Pattern": pattern,
+            "RepeatCount": repeat_count,
+            "Intervention": intervention,
+            "InvestigationId": investigation_id,
+            "Phase": phase,
         })
 
     def log_investigation_error(
@@ -885,6 +1152,144 @@ class AgentLogger:
             "ActionsCount": actions_count,
             "EvidenceCycles": evidence_cycles,
             "DurationSeconds": round(duration_seconds, 1),
+        })
+
+    # ── Telemetry completeness: additional pipeline events ───────────────
+
+    def log_data_truncation(
+        self,
+        xcv: str,
+        context: str,
+        original_chars: int,
+        truncated_chars: int,
+        reason: str = "",
+    ) -> None:
+        """Emit when data is truncated before sending to an LLM or logging."""
+        self._emit("DataTruncation", xcv, {
+            "Context": context,
+            "OriginalChars": original_chars,
+            "TruncatedChars": truncated_chars,
+            "DroppedChars": original_chars - truncated_chars,
+            "Reason": reason,
+        })
+
+    def log_token_budget(
+        self,
+        xcv: str,
+        agent_name: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        budget_limit: int,
+        utilisation_pct: float,
+    ) -> None:
+        """Emit token budget utilisation for an agent call."""
+        self._emit("TokenBudget", xcv, {
+            "Agent": agent_name,
+            "PromptTokens": prompt_tokens,
+            "CompletionTokens": completion_tokens,
+            "TotalTokens": prompt_tokens + completion_tokens,
+            "BudgetLimit": budget_limit,
+            "UtilisationPct": round(utilisation_pct, 1),
+        })
+
+    def log_evidence_cycle_count(
+        self,
+        xcv: str,
+        investigation_id: str,
+        hypothesis_id: str,
+        cycle_number: int,
+        max_cycles: int,
+        pending_er_ids: list[str] | None = None,
+    ) -> None:
+        """Emit evidence cycle progression per hypothesis."""
+        self._emit("EvidenceCycleCount", xcv, {
+            "InvestigationId": investigation_id,
+            "HypothesisId": hypothesis_id,
+            "CycleNumber": cycle_number,
+            "MaxCycles": max_cycles,
+            "PendingERs": ", ".join(pending_er_ids or []),
+        })
+
+    def log_hypothesis_cycle_count(
+        self,
+        xcv: str,
+        investigation_id: str,
+        cycle_number: int,
+        max_cycles: int,
+        active_hypotheses: int,
+        resolved_hypotheses: int,
+    ) -> None:
+        """Emit hypothesis evaluation cycle progression."""
+        self._emit("HypothesisCycleCount", xcv, {
+            "InvestigationId": investigation_id,
+            "CycleNumber": cycle_number,
+            "MaxCycles": max_cycles,
+            "ActiveHypotheses": active_hypotheses,
+            "ResolvedHypotheses": resolved_hypotheses,
+        })
+
+    def log_column_drop(
+        self,
+        xcv: str,
+        signal_type_id: str,
+        tool_name: str,
+        original_columns: int,
+        kept_columns: int,
+        dropped_columns: list[str] | None = None,
+    ) -> None:
+        """Emit when MCP result columns are dropped during normalisation."""
+        self._emit("ColumnDrop", xcv, {
+            "SignalTypeId": signal_type_id,
+            "Tool": tool_name,
+            "OriginalColumns": original_columns,
+            "KeptColumns": kept_columns,
+            "DroppedCount": original_columns - kept_columns,
+            "DroppedColumns": ", ".join(dropped_columns or []),
+        })
+
+    def log_cycle_reset(
+        self,
+        xcv: str,
+        investigation_id: str,
+        reset_reason: str,
+        old_cycle: int,
+        new_cycle: int,
+    ) -> None:
+        """Emit when an evidence or hypothesis cycle counter is reset."""
+        self._emit("CycleReset", xcv, {
+            "InvestigationId": investigation_id,
+            "ResetReason": reset_reason,
+            "OldCycle": old_cycle,
+            "NewCycle": new_cycle,
+        })
+
+    # ── Context folding events ───────────────────────────────────────────
+
+    def log_context_folding(
+        self,
+        xcv: str,
+        agent_name: str,
+        phase: str,
+        investigation_id: str,
+        messages_folded: int,
+        original_tokens: int,
+        folded_tokens: int,
+        fold_number: int = 1,
+        summary_content: str = "",
+    ) -> None:
+        """Emit when context folding compacts conversation history."""
+        # SummaryContent is diagnostic/operational data — always log in full
+        # regardless of per-agent log_output settings.
+        self._emit("ContextFolding", xcv, {
+            "Agent": agent_name,
+            "InvestigationId": investigation_id,
+            "Phase": phase,
+            "MessagesFolded": messages_folded,
+            "OriginalTokens": original_tokens,
+            "FoldedTokens": folded_tokens,
+            "TokenReduction": original_tokens - folded_tokens,
+            "FoldNumber": fold_number,
+            "SummaryContent": summary_content,
         })
 
 

@@ -1,6 +1,6 @@
-declare query_parameters (serviceTreeId:string, customerName:string);
-let startTime = ago(30m);
-let endTime = now();
+declare query_parameters (serviceTreeId:string, customerName:string, startTime:datetime, endTime:datetime);
+// Clamp window to max 1 hour to avoid resource-exhaustion on large datasets
+let effectiveEndTime = iff((endTime - startTime) > 1h, startTime + 1h, endTime);
 let tableSLIMapping =
 cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').external_table('External_SliIdToSliTableMapping')
     | where isnotempty(SliTableName)
@@ -20,7 +20,7 @@ let allResources =
     | order by SliTableName asc
     | extend formatted = strcat('(cluster("bdssli.westcentralus").database("slidata").["', SliTableName, '"]',
         " | where EndTimeUtc >= datetime(", format_datetime(startTime, 'yyyy-MM-dd HH:mm:ss'), ")",
-        " and EndTimeUtc < datetime(", format_datetime(endTime, 'yyyy-MM-dd HH:mm:ss'), ")",
+        " and EndTimeUtc < datetime(", format_datetime(effectiveEndTime, 'yyyy-MM-dd HH:mm:ss'), ")",
         ' | extend SubscriptionId = extract(@"/subscriptions/([^/]+)", 1, CustomerResourceId)',
         ' | extend Region = tolower(replace_string(iif(LocationId startswith "ms-loc",extract(@"^ms-loc://az/\\w*/([^/?]+)", 1, LocationId),LocationId)," ", ""))',
         ' | join kind=inner (subscriptionList) on $left.SubscriptionId == $right.SubscriptionGuid',

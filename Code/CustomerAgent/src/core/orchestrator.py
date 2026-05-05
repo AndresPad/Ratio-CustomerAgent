@@ -55,6 +55,7 @@ def build_group_chat_workflow(
     capture_middleware: ToolCallCaptureMiddleware | None = None,
     eval_middleware: OutputEvaluationMiddleware | None = None,
     injection_middleware: PromptInjectionMiddleware | None = None,
+    tool_injection_middleware=None,
     llm_logging_middleware: LLMLoggingMiddleware | None = None,
     agent_prompts: dict[str, str] | None = None,
 ):
@@ -129,7 +130,7 @@ def build_group_chat_workflow(
     )
 
     logger.info("GroupChat workflow built successfully")
-    return workflow, capture_middleware, eval_middleware, injection_middleware, llm_logging_middleware, agent_prompts
+    return workflow, capture_middleware, eval_middleware, injection_middleware, tool_injection_middleware, llm_logging_middleware, agent_prompts
 
 
 async def run_workflow_streaming(workflow_and_middleware, query: str):
@@ -146,8 +147,12 @@ async def run_workflow_streaming(workflow_and_middleware, query: str):
     """
     # Unpack workflow and middleware
     prompts: dict[str, str] = {}
+    tool_injection_mw = None
     if isinstance(workflow_and_middleware, tuple):
-        if len(workflow_and_middleware) == 6:
+        if len(workflow_and_middleware) == 7:
+            workflow, capture_mw, eval_mw, injection_mw, tool_injection_mw, llm_log_mw, prompts_dict = workflow_and_middleware
+            prompts = prompts_dict or {}
+        elif len(workflow_and_middleware) == 6:
             workflow, capture_mw, eval_mw, injection_mw, llm_log_mw, prompts_dict = workflow_and_middleware
             prompts = prompts_dict or {}
         elif len(workflow_and_middleware) == 5:
@@ -165,7 +170,7 @@ async def run_workflow_streaming(workflow_and_middleware, query: str):
             injection_mw = None
             llm_log_mw = None
     else:
-        workflow, capture_mw, eval_mw, injection_mw, llm_log_mw = workflow_and_middleware, None, None, None, None
+        workflow, capture_mw, eval_mw, injection_mw, tool_injection_mw, llm_log_mw = workflow_and_middleware, None, None, None, None, None
 
     yield {"type": "started", "query": query}
 
@@ -183,6 +188,8 @@ async def run_workflow_streaming(workflow_and_middleware, query: str):
         eval_mw.reset()
     if injection_mw:
         injection_mw.reset()
+    if tool_injection_mw:
+        tool_injection_mw.reset()
     if llm_log_mw:
         llm_log_mw.reset()
 
@@ -212,6 +219,7 @@ async def run_workflow_streaming(workflow_and_middleware, query: str):
 
                         # ── Drain shield detections from PREVIOUS agent ──
                         prev_injection_detections = injection_mw.drain() if injection_mw else []
+                        prev_injection_detections += tool_injection_mw.drain() if tool_injection_mw else []
 
                         current_executor = agent_name
 
@@ -278,6 +286,7 @@ async def run_workflow_streaming(workflow_and_middleware, query: str):
 
                         # ── Drain injection detections ──
                         injection_detections = injection_mw.drain() if injection_mw else []
+                        injection_detections += tool_injection_mw.drain() if tool_injection_mw else []
                         if injection_detections:
                             output_entry["prompt_injection"] = injection_detections
 

@@ -1,7 +1,14 @@
-declare query_parameters (lookbackHours:timespan = 4h, owningTenantNames:string = "[]");
+declare query_parameters (startTime:datetime, endTime:datetime, owningTenantNames:string = "[]");
 let _tenantNames = todynamic(owningTenantNames);
+// let _minWindow = 6h;
+// let _nearNow = (now() - endTime) < 5m;
+// let _tooNarrow = (endTime - startTime) < _minWindow;
+// let _effectiveStart = iif(_tooNarrow and _nearNow, endTime - _minWindow, startTime);
+// let _effectiveEnd = iif(_tooNarrow and not(_nearNow), startTime + _minWindow, endTime);
+let _effectiveStart = iif((endTime - startTime) < 6h, startTime - 6h, startTime);
+let _effectiveEnd = iif((endTime - startTime) < 6h, startTime + 6h, endTime);
 cluster('icmanalytics.centralus').database('IcmDataWarehouse').IncidentsSnapshotV2()
 | project IncidentId, Severity, IsOutage, Title, Status, CreateDate, ImpactStartDate, ChildCount,  
 OwningTenantName, SupportTicketId
-| where ImpactStartDate >= ago(lookbackHours) and (Severity <= 2 or IsOutage == true)
+| where ImpactStartDate between(_effectiveStart .. _effectiveEnd) and (Severity <= 2 or IsOutage == true)
 | where array_length(_tenantNames) == 0 or OwningTenantName in (_tenantNames)

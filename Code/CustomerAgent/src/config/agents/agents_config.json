@@ -92,7 +92,7 @@
       "tool_mode": "none",
       "mcp_tools": [],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
@@ -107,7 +107,7 @@
       "evaluate": true,
       "log_input": true,
       "log_output": true,
-      "prompt_injection": false
+      "prompt_injection": true
     },
     {
       "name": "analyst_coordinator",
@@ -123,7 +123,7 @@
         "customer_insights"
       ],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
@@ -132,11 +132,11 @@
       "description": "Routes investigation turns through phases: triage \u00e2\u2020\u2019 hypothesizing \u00e2\u2020\u2019 planning \u00e2\u2020\u2019 collecting \u00e2\u2020\u2019 reasoning \u00e2\u2020\u2019 acting \u00e2\u2020\u2019 notifying. Reads parsed signals and decides the next agent.",
       "prompt_file": "investigation_orchestrator_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
+      "temperature": 0.3,
       "tool_mode": "none",
       "mcp_tools": [],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
@@ -145,77 +145,42 @@
       "description": "Classifies activated signals, extracts symptoms from config templates, and determines investigation category (CAT-HEALTH-DEGRADE, CAT-OUTAGE-IMPACT, CAT-PROACTIVE-RISK, CAT-SUPPORT-ESCALATION)",
       "prompt_file": "investigation_triage_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
+      "temperature": 0.3,
+      "max_completion_tokens": 16000,
       "tool_mode": "filtered",
-      "mcp_tools": [
-        "collect_impacted_resource_customer_tool"
-      ],
       "evaluate": false,
       "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
     {
-      "name": "sli_collector",
-      "description": "Collects and synthesizes SLI breach data (customer-specific, multi-customer, load patterns) for evidence evaluation",
-      "prompt_file": "investigation_sli_collector_prompt.txt",
+      "name": "data_fetcher",
+      "description": "Fetches raw data from MCP collection tools and deposits full datasets into sandbox /mnt/data/ for downstream analysis. Does NOT summarize or interpret data.",
+      "prompt_file": "investigation_data_fetcher_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
-      "tool_mode": "filtered",
-      "mcp_tools": [
-        "collect_impacted_resource_customer_tool",
-        "collect_impacted_resource_multicustomer_tool"
-      ],
+      "temperature": 0.3,
+      "tool_mode": "fetch_tools",
+      "mcp_tools": [],
       "evaluate": false,
-      "prompt_injection": false,
-      "log_input": true,
-      "log_output": true
-    },
-    {
-      "name": "incident_collector",
-      "description": "Collects and synthesizes incident/outage data and root cause analysis for evidence evaluation",
-      "prompt_file": "investigation_incident_collector_prompt.txt",
-      "model": "gpt-4o",
-      "temperature": 1.0,
-      "tool_mode": "filtered",
-      "mcp_tools": [
-        "collect_incident_details_tool"      
-      ],
-      "evaluate": false,
-      "prompt_injection": false,
-      "log_input": true,
-      "log_output": true
-    },
-    {
-      "name": "support_collector",
-      "description": "Collects and synthesizes support ticket data (customer-specific and cross-customer patterns) for evidence evaluation",
-      "prompt_file": "investigation_support_collector_prompt.txt",
-      "model": "gpt-4o",
-      "temperature": 1.0,
-      "tool_mode": "filtered",
-      "mcp_tools": [
-        "collect_support_request_tool"
-      ],
-      "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
     {
       "name": "evidence_planner",
-      "description": "Plans and executes evidence collection for the current hypothesis by dispatching collector sub-agents in parallel, then consolidates their synthesized findings",
+      "description": "Plans and executes evidence collection for the current hypothesis by dispatching data_fetcher to populate sandbox, then sandbox_coder to analyze the raw datasets",
       "prompt_file": "investigation_evidence_planner_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
+      "temperature": 0.5,
+      "max_completion_tokens": 8000,
       "tool_mode": "agent_tools",
       "mcp_tools": [],
       "sub_agents": [
-        "sli_collector",
-        "incident_collector",
-        "support_collector"
+        "data_fetcher",
+        "sandbox_coder"
       ],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
@@ -224,11 +189,25 @@
       "description": "Evaluates collected evidence against the current hypothesis to determine CONFIRMED, CONTRIBUTING, REFUTED, or needs_more_evidence. Pure reasoning \u00e2\u20ac\u201d no tools.",
       "prompt_file": "investigation_reasoner_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
+      "temperature": 0.3,
+      "max_completion_tokens": 8000,
       "tool_mode": "none",
       "mcp_tools": [],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
+      "log_input": true,
+      "log_output": true
+    },
+    {
+      "name": "narrator",
+      "description": "Observes investigation agent outputs and produces first-person human-readable narration of the investigation flow. Runs outside the GroupChat after each agent turn.",
+      "prompt_file": "investigation_narrator_prompt.txt",
+      "model": "gpt-4o",
+      "temperature": 0.7,
+      "tool_mode": "none",
+      "mcp_tools": [],
+      "evaluate": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     },
@@ -237,11 +216,24 @@
       "description": "Selects and prioritizes remediation actions from the action catalog for confirmed or contributing hypotheses. Pure reasoning \u00e2\u20ac\u201d no tools, no execution.",
       "prompt_file": "investigation_action_planner_prompt.txt",
       "model": "gpt-4o",
-      "temperature": 1.0,
+      "temperature": 0.3,
       "tool_mode": "none",
       "mcp_tools": [],
       "evaluate": false,
-      "prompt_injection": false,
+      "prompt_injection": true,
+      "log_input": true,
+      "log_output": true
+    },
+    {
+      "name": "sandbox_coder",
+      "description": "Authors and executes Python analysis code in a secure sandbox. Given a question and collected evidence data, writes a statistical analysis script, executes it, and returns computed results (stdout answer + CSV files + manifest).",
+      "prompt_file": "investigation_sandbox_coder_prompt.txt",
+      "model": "gpt-4o",
+      "temperature": 0.3,
+      "tool_mode": "sandbox",
+      "mcp_tools": [],
+      "evaluate": false,
+      "prompt_injection": true,
       "log_input": true,
       "log_output": true
     }
@@ -256,7 +248,8 @@
       "customer_insights",
       "analyst_coordinator",
       "visualizer",
-      "summarizer"
+      "summarizer",
+      "sandbox_coder"
     ],
     "max_turns": 15,
     "intermediate_outputs": true,
@@ -264,21 +257,104 @@
   },
   "investigation_workflow": {
     "type": "group_chat",
+    "use_speaker_selector": true,
     "orchestrator_agent": "investigation_orchestrator",
     "participants": [
-      "triage_agent",
       "evidence_planner",
-      "reasoner",
-      "action_planner"
+      "reasoner"
     ],
-    "max_turns": 30,
+    "action_agent": "action_planner",
+    "max_turns": 40,
     "max_evidence_cycles": 2,
     "intermediate_outputs": true,
     "termination_signal": "investigation_resolved",
-    "scoring": {
-      "strength_aggregation": "avg",
-      "default_weight": 1,
-      "min_score_threshold": 0.0
+    "narrator_enabled": true,
+    "agent_timeout_seconds": {
+      "triage_agent": 120,
+      "action_planner": 120,
+      "group_chat": 600,
+      "default": 120
+    },
+    "retry_policy": {
+      "triage_agent": {
+        "max_retries": 2,
+        "backoff": "linear",
+        "backoff_base_seconds": 1
+      },
+      "evidence_planner": {
+        "max_retries": 1,
+        "backoff": "none",
+        "backoff_base_seconds": 0
+      },
+      "reasoner": {
+        "max_retries": 1,
+        "backoff": "none",
+        "backoff_base_seconds": 0
+      },
+      "action_planner": {
+        "max_retries": 1,
+        "backoff": "linear",
+        "backoff_base_seconds": 1
+      },
+      "default": {
+        "max_retries": 0,
+        "backoff": "none",
+        "backoff_base_seconds": 0
+      }
+    },
+    "phase_transitions": {
+      "hypothesizing": "evidence_planner",
+      "planning": "investigation_orchestrator",
+      "collecting": "reasoner",
+      "reasoning": "investigation_orchestrator",
+      "notifying": "investigation_orchestrator"
+    },
+    "agent_roles": {
+      "orchestrator": "investigation_orchestrator",
+      "evidence_planner": "evidence_planner",
+      "reasoner": "reasoner",
+      "triage": "triage_agent",
+      "action_planner": "action_planner",
+      "narrator": "narrator"
+    },
+    "cycle_detection": {
+      "history_window": 6,
+      "max_repeated_pattern": 3,
+      "max_identical_messages": 2
+    },
+    "max_eval_hypotheses": 4,
+    "max_rows_per_grain": 5,
+    "phase_pipeline": {
+      "phases": [
+        {
+          "name": "triage",
+          "agent": "triage_agent",
+          "mode": "standalone",
+          "retryable": true
+        },
+        {
+          "name": "hypothesizing",
+          "mode": "programmatic"
+        },
+        {
+          "name": "evidence_loop",
+          "agents": ["evidence_planner", "reasoner"],
+          "mode": "groupchat",
+          "max_cycles": 2,
+          "sub_phases": ["planning", "collecting", "reasoning"]
+        },
+        {
+          "name": "acting",
+          "agent": "action_planner",
+          "mode": "standalone",
+          "retryable": true
+        },
+        {
+          "name": "notifying",
+          "mode": "auto_complete"
+        }
+      ],
+      "legal_transitions": {}
     }
   }
 }

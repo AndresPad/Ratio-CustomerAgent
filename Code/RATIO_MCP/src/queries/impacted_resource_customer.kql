@@ -1,6 +1,9 @@
-declare query_parameters (serviceTreeId:string, customerName:string);
-let startTime = ago(30m);
-let endTime = now();
+declare query_parameters (serviceTreeId:string, customerName:string, startTime:datetime, endTime:datetime);
+// Clamp window to max 1 hour to avoid resource-exhaustion on large datasets
+let effectiveEndTime = iff((endTime - startTime) > 1h, startTime + 1h, endTime);
+let SliCategory = cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').ServiceSliCategories
+| project ServiceTreeId, SliId, SliCategory
+;
 let tableSLIMapping =
 cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').external_table('External_SliIdToSliTableMapping')
     | where isnotempty(SliTableName)
@@ -17,12 +20,14 @@ let subscriptionList =
 let ImpactedResource =
     tableSLIMapping
     | where ServiceTreeId ==  serviceTreeId//'734379f9-2d2c-48d4-a52a-5c509f699de4'
-    | project SliTableName, Target
+    | join kind=leftouter SliCategory on $left.SliId == $right.SliId and $left.ServiceTreeId == $right.ServiceTreeId
+    | project SliTableName, Target, SliCategory
     | order by SliTableName asc
     | extend formatted = strcat('(cluster("bdssli.westcentralus").database("slidata").["', SliTableName, '"]',
         " | where EndTimeUtc >= datetime(", format_datetime(startTime, 'yyyy-MM-dd HH:mm:ss'), ")",
-        " and EndTimeUtc < datetime(", format_datetime(endTime, 'yyyy-MM-dd HH:mm:ss'), ")",
+        " and EndTimeUtc < datetime(", format_datetime(effectiveEndTime, 'yyyy-MM-dd HH:mm:ss'), ")",
         " and Value < ", todecimal(Target),
+        " | extend SliCategory = '", SliCategory, "'",
         ' | extend SubscriptionId = extract(@"/subscriptions/([^/]+)", 1, CustomerResourceId)',
         ' | extend Region = tolower(replace_string(iif(LocationId startswith "ms-loc",extract(@"^ms-loc://az/\\w*/([^/?]+)", 1, LocationId),LocationId)," ", ""))',
         ' | join kind=inner (subscriptionList) on $left.SubscriptionId == $right.SubscriptionGuid',
@@ -33,7 +38,7 @@ let fullQuery =
     ImpactedResource
     | summarize tables = strcat_array(make_list(formatted), ', ')
     | extend query = iif(isempty(tables),
-        "print dummy=1 | where 1==0 | extend CustomerResourceId='', SLO_SliId='', StartTimeUtc=datetime(null), EndTimeUtc=datetime(null), Value=real(null), LocationId='', SubscriptionId='', CustomerName='', Region=''",
+        "print dummy=1 | where 1==0 | extend CustomerResourceId='', SLO_SliId='', SliCategory='', StartTimeUtc=datetime(null), EndTimeUtc=datetime(null), Value=real(null), LocationId='', SubscriptionId='', CustomerName='', Region=''",
         strcat("union ", tables))
     | take 1
     | project query;
@@ -66,7 +71,7 @@ let resourceImpacts =
         ImpactDurationMin = datetime_diff('minute', max(EndTimeUtc), min(StartTimeUtc)),
         AvgValue = avg(Value),
         MinValue = min(Value)
-        by CustomerResourceId, CustomerName, SLO_SliId, Region, IslandId
+        by CustomerResourceId, CustomerName, SLO_SliId, SliCategory, Region, IslandId
     | project-away IslandId
 ;
 // Step 4: Extract SubscriptionId and summarize per subscription
@@ -80,5 +85,5 @@ resourceImpacts
     AvgValueAcrossWindows = avg(AvgValue),
     MinValueAcrossWindows = min(MinValue)
     // ImpactWindows = count()
-    by CustomerName, SubscriptionId, Region, SLO_SliId
+    by CustomerName, SubscriptionId, Region, SLO_SliId, SliCategory
 | order by TotalImpactDurationMin desc

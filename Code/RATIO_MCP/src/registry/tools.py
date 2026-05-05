@@ -201,8 +201,6 @@ def _make_kusto_handler(entry: dict):
     validation = entry.get("validation", {})
     cert_client_id_env = entry.get("cert_client_id_env")
     default_max_rows = entry.get("max_rows", 200)  # cap Kusto results to avoid token explosion
-    max_lookback_raw = entry.get("max_lookback")  # e.g. "12h"
-    max_lookback_hours = _parse_kql_timespan_hours(max_lookback_raw) if max_lookback_raw else None
 
     async def handler(**kwargs) -> str:
         from helper.kusto_auth import get_kusto_client
@@ -262,15 +260,6 @@ def _make_kusto_handler(entry: dict):
                     value = param_spec.get("default", "")
                     crp.set_parameter(kparam_name, str(value))
                     continue
-            # Clamp lookback_hours to max_lookback if configured
-            if max_lookback_hours and source == "lookback_hours" and value:
-                requested = _parse_kql_timespan_hours(str(value))
-                if requested and requested > max_lookback_hours:
-                    logger.info(
-                        "%s: clamping lookback_hours from %s to %s (max_lookback=%s)",
-                        entry["name"], value, max_lookback_raw, max_lookback_raw,
-                    )
-                    value = max_lookback_raw
             cast = kparam_spec.get("cast")
             if cast == "int":
                 try:

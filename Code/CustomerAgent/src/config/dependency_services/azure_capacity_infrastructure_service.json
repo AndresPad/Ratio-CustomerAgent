@@ -6,14 +6,17 @@
   "sli_symptoms": [
     {
       "sliId": "CIS FrontEnd SLOs.FE Availability.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM creation requests fail or time out in affected regions/zones"]
     },
     {
       "sliId": "CIS FrontEnd SLOs.CIS FE request successful rate.Signal",
+      "sli_category": "management",
       "symptoms": ["VM creation requests fail or time out in affected regions/zones"]
     },
     {
       "sliId": "CIS Backend SLOs.CIS Host Availability.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM creation requests fail or time out in affected regions/zones"]
     }
   ]

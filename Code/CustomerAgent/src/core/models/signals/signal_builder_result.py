@@ -17,5 +17,7 @@ class SignalBuilderResultModel(BaseModel):
     service_tree_id: str = ""
     service_name: str = ""
     xcv: str = ""
+    start_time: str = ""
+    end_time: str = ""
     type_results: list[TypeSignalResultModel] = Field(default_factory=list)
     compound_results: list[CompoundSignalResultModel] = Field(default_factory=list)

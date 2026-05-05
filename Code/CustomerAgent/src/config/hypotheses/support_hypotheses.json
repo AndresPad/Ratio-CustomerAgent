@@ -1,0 +1,125 @@
+{
+  "hypotheses": [
+    {
+      "id": "HYP-SUP-001",
+      "name": "Customer SR with Full Corroboration",
+      "statement": "Customer '{customer_name}' raised a support request and all evidence sources confirm impact — SLI degradation detected in '{sli_category}', other customers reporting issues, and service team has an active incident. This is a widespread, known platform issue.",
+      "category": "support",
+      "scope": "widespread",
+      "expected_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SUP-002",
+        "SYM-SUP-003",
+        "SYM-SUP-004",
+        "SYM-SLI-001",
+        "SYM-SLI-002",
+        "SYM-SLI-004",
+        "SYM-SUP-005",
+        "SYM-SUP-006",
+        "SYM-OUT-001",
+        "SYM-OUT-002",
+        "SYM-OUT-003",
+        "SYM-OUT-004"
+      ],
+      "min_symptoms_for_match": 1,
+      "required_symptoms": [
+        "SYM-SUP-001"
+      ],
+      "evidence_needed": [
+        "ER-TKT-001",
+        "ER-SLI-001",
+        "ER-SLI-002",
+        "ER-TKT-002",
+        "ER-OUT-001"
+      ],
+      "supporting_signals": "Strongest when SYM-SUP-002 (CritSit) co-occurs with SLI breach symptoms (SYM-SLI-001/002) AND other customer SRs (SYM-SUP-005) AND incident (SYM-OUT-001/002). The SLI category that spikes determines the nature of impact: connectivity → connection failures, availability → service down, capacity → throttling, management → control plane failures. SYM-OUT-004 (customer-correlated incident) is direct linkage. Scope: widespread — multiple evidence sources confirm platform-level issue."
+    },
+    {
+      "id": "HYP-SUP-002",
+      "name": "Customer SR Corroborated by SLI Degradation",
+      "statement": "Customer '{customer_name}' raised a support request and SLI degradation in '{sli_category}' confirms telemetry-level impact. No other customers or service team incidents detected — issue appears localized to this customer.",
+      "category": "support",
+      "scope": "localized",
+      "expected_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SUP-002",
+        "SYM-SUP-003",
+        "SYM-SLI-001",
+        "SYM-SLI-002",
+        "SYM-SLI-004"
+      ],
+      "min_symptoms_for_match": 2,
+      "required_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SLI-001"
+      ],
+      "evidence_needed": [
+        "ER-TKT-001",
+        "ER-SLI-001",
+        "ER-SLI-002",
+        "ER-TKT-002",
+        "ER-OUT-001"
+      ],
+      "supporting_signals": "Customer SR + SLI breach = confirmed impact with telemetry evidence. The SLI category identifies the failure domain. If SYM-SLI-002 (cross-region) fires, the issue spans multiple regions. If only SYM-SLI-001 (single region), it's region-specific. Absence of SYM-SUP-005 (other SRs) and SYM-OUT-001 (incidents) means the issue is likely customer-specific — misconfiguration, application bug, quota/throttling, or isolated service problem."
+    },
+    {
+      "id": "HYP-SUP-003",
+      "name": "Customer SR with Platform Evidence but No SLI Correlation",
+      "statement": "Customer '{customer_name}' raised a support request. No SLI degradation detected for this customer, but other customers are reporting issues and/or the service team has an active incident — this is a known platform issue with a monitoring gap for this customer's telemetry.",
+      "category": "support",
+      "scope": "widespread",
+      "expected_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SUP-002",
+        "SYM-SUP-005",
+        "SYM-SUP-006",
+        "SYM-OUT-001",
+        "SYM-OUT-002",
+        "SYM-OUT-003"
+      ],
+      "min_symptoms_for_match": 2,
+      "required_symptoms": [
+        "SYM-SUP-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SLI-001"
+      ],
+      "evidence_needed": [
+        "ER-TKT-001",
+        "ER-SLI-001",
+        "ER-TKT-002",
+        "ER-OUT-001"
+      ],
+      "supporting_signals": "Customer SR is real, but no SLI correlation found — this indicates a monitoring gap (the failure mode isn't captured by current SLIs) or an intermittent issue that doesn't sustain long enough to breach SLI thresholds. However, platform evidence (other SRs or incidents) confirms this is NOT a false report. The customer's issue is real and the root cause is platform-level. Action: investigate monitoring coverage for this failure mode."
+    },
+    {
+      "id": "HYP-SUP-004",
+      "name": "Customer SR with No Corroboration",
+      "statement": "Customer '{customer_name}' raised a support request but no SLI degradation, other customer reports, or service team incidents were found. The customer's reported impact is real but has no telemetry or platform correlation — possible monitoring gap, intermittent issue, or customer-side problem.",
+      "category": "support",
+      "scope": "localized",
+      "expected_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SUP-002",
+        "SYM-SUP-003"
+      ],
+      "min_symptoms_for_match": 1,
+      "required_symptoms": [
+        "SYM-SUP-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SLI-001",
+        "SYM-SUP-005",
+        "SYM-OUT-001"
+      ],
+      "evidence_needed": [
+        "ER-TKT-001",
+        "ER-SLI-001",
+        "ER-SLI-002",
+        "ER-TKT-002",
+        "ER-OUT-001"
+      ],
+      "supporting_signals": "The customer reported impact, which is always authoritative. Absence of telemetry does NOT mean no impact — it means the issue is not captured by current SLI monitoring. Possible causes: (1) intermittent failures that don't breach SLI thresholds, (2) failure mode not covered by SLI categories, (3) customer-side configuration or application issue, (4) DNS/network path issue not instrumented. SYM-SUP-002 (CritSit) or SYM-SUP-003 (escalated) increases urgency. Action: investigate monitoring gaps and customer-specific root cause."
+    }
+  ]
+}

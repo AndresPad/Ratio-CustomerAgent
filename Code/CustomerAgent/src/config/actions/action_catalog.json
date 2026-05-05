@@ -8,10 +8,8 @@
       "description": "Create an IcM ticket for the owning service team with investigation findings, confirmed hypothesis, and evidence summary. Links the ticket to the triggering incident if one exists.",
       "applicable_hypotheses": [
         "HYP-SLI-001",
-        "HYP-SLI-002",
         "HYP-SLI-003",
         "HYP-SLI-004",
-        "HYP-SLI-005",
         "HYP-DEP-001"
       ],
       "applicable_categories": ["sli", "dependency"],
@@ -54,10 +52,8 @@
         "HYP-OUT-004",
         "HYP-OUT-005",
         "HYP-SLI-001",
-        "HYP-SLI-002",
         "HYP-SLI-003",
         "HYP-SLI-004",
-        "HYP-SLI-005",
         "HYP-DEP-001",
         "HYP-RISK-003"
       ],
@@ -78,9 +74,7 @@
       "applicable_hypotheses": [
         "HYP-OUT-001",
         "HYP-OUT-002",
-        "HYP-SLI-001",
-        "HYP-SLI-002",
-        "HYP-SLI-005"
+        "HYP-SLI-001"
       ],
       "applicable_categories": ["outage", "sli"],
       "min_confidence": 0.5,
@@ -100,8 +94,7 @@
       "tier": "gated",
       "description": "Escalate to CritSit or DRI (Designated Responsible Individual) when high-confidence confirmation of broad customer impact — multiple subscriptions, regions, or customers affected. Requires human approval.",
       "applicable_hypotheses": [
-        "HYP-SLI-004",
-        "HYP-SLI-005"
+        "HYP-SLI-004"
       ],
       "applicable_categories": ["sli"],
       "min_confidence": 0.7,

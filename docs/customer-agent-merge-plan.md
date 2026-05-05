@@ -248,7 +248,7 @@ core/models/
 ├── hypothesis.py                ← HypothesisModel, EvidenceItemModel,
 │                                   EvidenceRequirementModel, InvestigationContextModel,
 │                                   StreamEventModel
-├── investigationModel.py        ← InvestigationModel (imports from symptoms.py & hypothesis.py)
+├── investigation.py             ← InvestigationModel (imports from symptoms.py & hypothesis.py)
 └── enums.py                     ← InvestigationPhase, HypothesisStatus, EvidenceVerdict,
                                     SymptomVerdict (shared by both layers)
 ```
@@ -266,7 +266,7 @@ core/models/
 | `EvidenceItem` | `core/investigation/investigation_state.py` | `EvidenceItemModel` | `core/models/hypothesis.py` |
 | `EvidenceRequirement` | `core/investigation/investigation_state.py` | `EvidenceRequirementModel` | `core/models/hypothesis.py` |
 | `InvestigationContext` | `core/investigation/investigation_state.py` | `InvestigationContextModel` | `core/models/hypothesis.py` |
-| `Investigation` | `core/investigation/investigation_state.py` | `InvestigationModel` | `core/models/investigationModel.py` |
+| `Investigation` | `core/investigation/investigation_state.py` | `InvestigationModel` | `core/models/investigation.py` |
 | `StreamEvent` | `core/investigation/investigation_state.py` | `StreamEventModel` | `core/models/hypothesis.py` |
 | `InvestigationPhase` | `core/investigation/investigation_state.py` | (move to shared) | `core/models/enums.py` |
 | `HypothesisStatus` | `core/investigation/investigation_state.py` | (move to shared) | `core/models/enums.py` |
@@ -319,7 +319,7 @@ class HypothesisModel(BaseModel):
 ```
 
 ```python
-# core/models/investigationModel.py
+# core/models/investigation.py
 from pydantic import BaseModel, Field
 from typing import Any
 from core.models.enums import InvestigationPhase
@@ -354,12 +354,12 @@ class InvestigationModel(BaseModel):
 | 5.2 | Create `core/models/signal_models.py` — Pydantic `BaseModel` interfaces extracted from `core/signals/signal_models.py`. Include only the data fields (no `to_dict()` methods — Pydantic handles serialization). Keep the dataclass originals untouched |
 | 5.3 | Create `core/models/symptoms.py` — Pydantic `BaseModel` interface for `SymptomModel`, extracted from `core/investigation/investigation_state.py`. Standalone file so symptoms can be imported independently without pulling in the full investigation model graph |
 | 5.4 | Create `core/models/hypothesis.py` — Pydantic `BaseModel` interfaces for `HypothesisModel`, `EvidenceItemModel`, `EvidenceRequirementModel`, `InvestigationContextModel`, `StreamEventModel`. Imports `SymptomModel` from `core.models.symptoms` for composition |
-| 5.5 | Create `core/models/investigationModel.py` — Pydantic `BaseModel` for `InvestigationModel` only. Imports `SymptomModel` from `symptoms.py`, `HypothesisModel` / `EvidenceItemModel` / `EvidenceRequirementModel` / `InvestigationContextModel` from `hypothesis.py`. This is the top-level aggregate that composes all other models, so it lives in its own file to keep the dependency graph clean |
+| 5.5 | Create `core/models/investigation.py` — Pydantic `BaseModel` for `InvestigationModel` only. Imports `SymptomModel` from `symptoms.py`, `HypothesisModel` / `EvidenceItemModel` / `EvidenceRequirementModel` / `InvestigationContextModel` from `hypothesis.py`. This is the top-level aggregate that composes all other models, so it lives in its own file to keep the dependency graph clean |
 | 5.6 | Create `core/models/__init__.py` — re-export all models and enums for convenient imports |
 | 5.7 | Add `to_model()` methods to the domain dataclasses that return the corresponding Pydantic interface (e.g., `Symptom.to_model() → SymptomModel`). Add `@classmethod from_model()` for the reverse direction |
 | 5.8 | Update `server/app.py` response schemas to use the new Pydantic models from `core/models/` instead of raw dicts |
 
-**Files created:** 6 new files (`core/models/__init__.py`, `enums.py`, `signal_models.py`, `symptoms.py`, `hypothesis.py`, `investigationModel.py`)
+**Files created:** 6 new files (`core/models/__init__.py`, `enums.py`, `signal_models.py`, `symptoms.py`, `hypothesis.py`, `investigation.py`)
 **Files modified:** 2 files (`core/investigation/investigation_state.py` — enum imports; `core/signals/signal_models.py` — add `to_model()`)
 **Files in `Code/Servers/agents/models/`:** NOT TOUCHED
 **Conflict risk:** LOW — new package is additive; only change to existing files is moving enum definitions to a shared location and adding conversion methods

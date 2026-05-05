@@ -1,0 +1,18 @@
+{
+  "name": "SQL Connectivity",
+  "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+  "category": "database_connectivity",
+  "impact_description": "Handles SQL database connectivity. Degradation causes SQL DB connection failures and login errors.",
+  "sli_symptoms": [
+    {
+      "sliId": "Connection-Health-Azure SQL DB Test.Login Success-Rate - Azure SQL DB v2 login testing.Signal",
+      "sli_category": "connectivity",
+      "symptoms": ["SQL DB connection attempts timeout", "SQL DB login failures increase"]
+    },
+    {
+      "sliId": "Connection-Health-Azure SQL DB.Login Success-Rate - Azure SQL DB.Signal",
+      "sli_category": "connectivity",
+      "symptoms": ["SQL DB connection attempts timeout", "SQL DB login failures increase"]
+    }
+  ]
+}

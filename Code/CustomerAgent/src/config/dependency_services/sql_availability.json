@@ -1,0 +1,18 @@
+{
+  "name": "SQL Availability and GeoDR",
+  "service_tree_id": "61173952-2056-4f87-a4ad-809ba0db7528",
+  "category": "availability",
+  "impact_description": "Handles SQL database availability and geo-disaster recovery. Degradation causes SQL DB availability issues and failover errors.",
+  "sli_symptoms": [
+    {
+      "sliId": "DB Heartbeat.SQL DB Heartbeat - Availability - BC/Premium.Signal",
+      "sli_category": "availability",
+      "symptoms": ["SQL DB failover operations fail or are delayed", "SQL DB read replicas become unavailable"]
+    },
+    {
+      "sliId": "DB Heartbeat.SQL DB Heartbeat - Availability - GP.Signal",
+      "sli_category": "availability",
+      "symptoms": ["SQL DB failover operations fail or are delayed", "SQL DB read replicas become unavailable"]
+    }
+  ]
+}

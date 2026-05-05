@@ -1,0 +1,9 @@
+{
+  "strength_aggregation": "avg",
+  "default_weight": 1,
+  "min_score_threshold": 0.0,
+  "category_boost_factor": 1.5,
+  "category_mismatch_penalty": 0.5,
+  "category_unknown_modifier": 0.8,
+  "max_score": 7.5
+}

@@ -6,34 +6,42 @@
   "sli_symptoms": [
     {
       "sliId": "Free Vips Success Rate.Free Vips Success Rate.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose cross-VNET connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Free Vips Success Rate FF.Free Vips Success Rate FF.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose cross-VNET connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Free Macs Success Rate FF.Free Macs Success Rate FF.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose network interface connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Free Macs Success Rate.Free Macs Success Rate.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose network interface connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Allocate Macs Success Rate FF.Allocate Macs Success Rate FF.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs fail to attach network interfaces", "VMs lose network interface connectivity"]
     },
     {
       "sliId": "Allocate Gre Success Rate FF.Allocate Gre Success Rate FF.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose cross-VNET connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Allocate Gre Success Rate.Allocate Gre Success Rate.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs lose cross-VNET connectivity", "VMs experience routing failures"]
     },
     {
       "sliId": "Allocate Macs Success Rate.Allocate Macs Success Rate.Signal",
+      "sli_category": "connectivity",
       "symptoms": ["VMs fail to attach network interfaces", "VMs lose network interface connectivity"]
     }
   ]

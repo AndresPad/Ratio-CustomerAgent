@@ -2,22 +2,102 @@
   "hypotheses": [
     {
       "id": "HYP-DEP-001",
-      "name": "Dependency Service Resource Exhaustion or fragmentation in compute, network, or storage pools prevented successful VM allocation, provisioning, or scaling in customer Region",
-      "statement": "Dependency service '{dependency_service_name}' is degraded in region '{region}' where the primary customer has resources. SLI breaches on dependency services (Allocator, CIS, Regional Network Manager, Xstore, etc.) in customer regions indicate resource exhaustion or infrastructure failure that will cascade into customer-visible impact.",
+      "name": "Dependency Degradation Cascading to Customer",
+      "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions, and the primary service SLIs for customer '{customer_name}' are also degraded. Other customers have reported issues — confirming the dependency cascade is causing customer impact.",
       "category": "dependency",
+      "scope": "widespread",
+      "relevant_categories": [
+        "any"
+      ],
       "expected_symptoms": [
         "SYM-DEP-001",
         "SYM-DEP-002",
         "SYM-DEP-003",
-        "SYM-SLI-001"
+        "SYM-DEP-004",
+        "SYM-SLI-001",
+        "SYM-SLI-002",
+        "SYM-SLI-004",
+        "SYM-SUP-005"
       ],
-      "min_symptoms_for_match": 2,
+      "min_symptoms_for_match": 3,
+      "required_symptoms": [
+        "SYM-DEP-001",
+        "SYM-SLI-001",
+        "SYM-SUP-005"
+      ],
+      "excluding_symptoms": [
+        "SYM-SUP-001"
+      ],
       "evidence_needed": [
         "ER-DEP-002",
         "ER-REGION-001",
-        "ER-SLI-001"
+        "ER-SLI-001",
+        "ER-SLI-002",
+        "ER-TKT-002"
       ],
-      "supporting_signals": "Strongest when SYM-DEP-002 or SYM-DEP-003 (multiple SLIs or multiple dependency services degraded) co-occurs with SYM-SLI-001 (primary customer already showing impact). SYM-DEP-001 alone is a proactive leading indicator — the customer may not yet be impacted, but the dependency they rely on is degraded in their region. SYM-DEP-003 (multi-dependency) suggests regional resource exhaustion. When combined with SYM-SLI-001, it confirms the cascade: dependency degradation → customer impact."
+      "supporting_signals": "Full dependency cascade confirmed — dependency SLI breach (SYM-DEP-001/002) cascading into primary service SLI breach (SYM-SLI-001/002) with customer validation (SYM-SUP-005). SYM-DEP-002 (cross-region) or SYM-DEP-003 (multi-SLI) indicate broad dependency failure. SYM-DEP-004 (multiple deps degraded) is the strongest signal — regional infrastructure failure. The primary SLI category identifies how the cascade manifests for the customer."
+    },
+    {
+      "id": "HYP-DEP-002",
+      "name": "Dependency Degradation with Partial Cascade Evidence",
+      "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions. Partial cascade evidence found for customer '{customer_name}' — either the primary service SLIs show degradation OR other customers have reported issues, but not both.",
+      "category": "dependency",
+      "relevant_categories": [
+        "any"
+      ],
+      "expected_symptoms": [
+        "SYM-DEP-001",
+        "SYM-DEP-002",
+        "SYM-DEP-003",
+        "SYM-SLI-001",
+        "SYM-SUP-005"
+      ],
+      "min_symptoms_for_match": 2,
+      "required_symptoms": [
+        "SYM-DEP-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SUP-001"
+      ],
+      "evidence_needed": [
+        "ER-DEP-002",
+        "ER-REGION-001",
+        "ER-SLI-001",
+        "ER-TKT-002"
+      ],
+      "supporting_signals": "Dependency degradation with partial cascade. If SYM-SLI-001 fires (primary SLI degraded) but no other SRs — the cascade is happening but customer hasn't reported and others may not be affected. If SYM-SUP-005 fires but no primary SLI spike — the dependency issue is affecting other customers through a path not visible in this customer's SLIs. SYM-DEP-002 (cross-region) increases confidence the dependency issue is broad. Monitor for escalation."
+    },
+    {
+      "id": "HYP-DEP-003",
+      "name": "Dependency Degradation — No Cascade Evidence",
+      "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions for customer '{customer_name}', but the primary service SLIs are stable and no customers have reported issues. The dependency is degraded but cascade to primary service not yet observed.",
+      "category": "dependency",
+      "scope": "localized",
+      "relevant_categories": [
+        "any"
+      ],
+      "expected_symptoms": [
+        "SYM-DEP-001",
+        "SYM-DEP-002",
+        "SYM-DEP-003",
+        "SYM-DEP-004"
+      ],
+      "min_symptoms_for_match": 1,
+      "required_symptoms": [
+        "SYM-DEP-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SLI-001",
+        "SYM-SUP-001",
+        "SYM-SUP-005"
+      ],
+      "evidence_needed": [
+        "ER-DEP-002",
+        "ER-REGION-001",
+        "ER-SLI-001",
+        "ER-TKT-002"
+      ],
+      "supporting_signals": "Dependency degradation detected but no cascade evidence yet. This is an early warning — the dependency service is failing but the primary service may have resilience (retries, circuit breakers, caching) absorbing the impact temporarily. SYM-DEP-002 (cross-region) elevates risk — if the dependency fails across multiple regions, the cascade is more likely. SYM-DEP-004 (multiple deps degraded) is critical risk — regional infrastructure stress that will likely cascade. Monitor primary service SLIs closely for emerging degradation."
     }
   ]
 }

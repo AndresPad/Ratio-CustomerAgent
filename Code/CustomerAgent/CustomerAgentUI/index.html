@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Agent — Investigation Monitor</title>
+    <link rel="stylesheet" href="/styles.css?v=2">
+</head>
+<body>
+    <!-- ── Top Bar ────────────────────────────────────────────────── -->
+    <header id="topbar">
+        <div class="topbar-left">
+            <span class="logo">⚡</span>
+            <h1>Customer Agent</h1>
+            <span class="subtitle">Investigation Monitor</span>
+        </div>
+        <div class="topbar-right">
+            <span id="xcv-display" class="xcv-label" title="Click to copy"></span>
+            <span id="status-badge" class="badge badge-idle">Idle</span>
+            <span id="elapsed-time" class="elapsed">—</span>
+        </div>
+    </header>
+
+    <!-- ── Phase Progress Bar (12 stages) ─────────────────────────── -->
+    <div id="phase-bar"></div>
+
+    <!-- ── Main Content Area ──────────────────────────────────────── -->
+    <div id="main-layout">
+
+        <!-- Sidebar: run controls + navigation -->
+        <aside id="sidebar">
+            <button id="sidebar-collapse" class="sidebar-collapse-btn" title="Collapse sidebar">◀</button>
+            <!-- Run Controls -->
+            <div class="sidebar-section">
+                <h3>Investigate</h3>
+                <input type="text" id="customer-input" placeholder="Customer name (optional)" value="BlackRock, Inc">
+                <input type="text" id="service-input" placeholder="Service Tree ID (optional)">
+                <div class="datetime-group">
+                    <label for="start-time-input">Start Time (UTC)</label>
+                    <input type="datetime-local" id="start-time-input" step="1" title="Start time (UTC, optional — defaults to now − 4h)">
+                </div>
+                <div class="datetime-group">
+                    <label for="end-time-input">End Time (UTC)</label>
+                    <input type="datetime-local" id="end-time-input" step="1" title="End time (UTC, optional — defaults to now)">
+                </div>
+                <button id="btn-run" class="btn btn-primary">▶ Investigate</button>
+                <button id="btn-stop" class="btn btn-danger" disabled>■ Stop</button>
+            </div>
+
+            <!-- View Selector -->
+            <div class="sidebar-section">
+                <h3>Views</h3>
+                <div class="view-tabs">
+                    <button class="view-tab active" data-view="stream">Stream</button>
+                    <button class="view-tab" data-view="graph">Graph</button>
+                    <button class="view-tab" data-view="agentflow">Agent Flow</button>
+                    <button class="view-tab" data-view="timeline">Timeline</button>
+                    <button class="view-tab" data-view="learning">Learning</button>
+                    <button class="view-tab" data-view="sandbox">Sandbox</button>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="sidebar-section">
+                <h3 class="sidebar-section-toggle" data-toggle="config-nav">Configuration <span class="toggle-arrow">▾</span></h3>
+                <div class="config-nav" id="config-nav">
+                    <button class="config-nav-item" data-config="signals">Signals <span class="config-count" id="cfg-count-signals">0</span></button>
+                    <button class="config-nav-item" data-config="symptoms">Symptoms <span class="config-count" id="cfg-count-symptoms">0</span></button>
+                    <button class="config-nav-item" data-config="hypotheses">Hypotheses <span class="config-count" id="cfg-count-hypotheses">0</span></button>
+                    <button class="config-nav-item" data-config="evidence">Evidence <span class="config-count" id="cfg-count-evidence">0</span></button>
+                    <button class="config-nav-item" data-config="actions">Actions <span class="config-count" id="cfg-count-actions">0</span></button>
+                    <button class="config-nav-item" data-config="dependencies">Dependencies <span class="config-count" id="cfg-count-dependencies">0</span></button>
+                    <button class="config-nav-item" data-config="monitoring_context">Monitoring <span class="config-count" id="cfg-count-monitoring_context">1</span></button>
+                    <button class="config-nav-item" data-config="scoring_config">Scoring <span class="config-count" id="cfg-count-scoring_config">1</span></button>
+                    <div class="config-nav-divider"></div>
+                    <span class="config-nav-label">Mappings</span>
+                    <button class="config-nav-item" data-mapping="signal-symptom">Signal → Symptom</button>
+                    <button class="config-nav-item" data-mapping="symptom-hypothesis">Symptom → Hypothesis</button>
+                    <button class="config-nav-item" data-mapping="evidence-hypothesis">Evidence → Hypothesis</button>
+                    <button class="config-nav-item" data-mapping="action-hypothesis">Action → Hypothesis</button>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- Center: Active View -->
+        <main id="center-panel">
+            <!-- Stats cards row -->
+            <div id="stats-bar">
+                <div class="stat-card"><span class="stat-label">Events</span><span class="stat-value" id="stat-events">0</span></div>
+                <div class="stat-card"><span class="stat-label">Signals</span><span class="stat-value" id="stat-signals">0</span></div>
+                <div class="stat-card"><span class="stat-label">Compounds</span><span class="stat-value" id="stat-compounds">0</span></div>
+                <div class="stat-card"><span class="stat-label">Symptoms</span><span class="stat-value" id="stat-symptoms">0</span></div>
+                <div class="stat-card"><span class="stat-label">Hypotheses</span><span class="stat-value" id="stat-hypotheses">0</span></div>
+                <div class="stat-card"><span class="stat-label">Evidence</span><span class="stat-value" id="stat-evidence">0</span></div>
+                <div class="stat-card"><span class="stat-label">Actions</span><span class="stat-value" id="stat-actions">0</span></div>
+            </div>
+            <!-- Service filter bar -->
+            <div id="service-filter-bar" class="service-filter-bar" style="display:none">
+                <label for="service-filter">Service:</label>
+                <select id="service-filter">
+                    <option value="__all__">All Services</option>
+                </select>
+                <span id="service-xcv-display" class="service-xcv"></span>
+            </div>
+            <div id="view-stream" class="view active"></div>
+            <div id="view-graph" class="view"></div>
+            <div id="view-agentflow" class="view"></div>
+            <div id="view-timeline" class="view"></div>
+            <div id="view-learning" class="view"></div>
+            <div id="view-sandbox" class="view"></div>
+            <div id="view-config" class="view"></div>
+        </main>
+
+        <!-- Right: Context Panels (collapsible) -->
+        <aside id="context-panels">
+            <div class="ctx-section" id="ctx-signals">
+                <h3 class="ctx-header" data-toggle="signals-body">Signals <span class="ctx-count">0</span></h3>
+                <div class="ctx-body" id="signals-body"></div>
+            </div>
+            <div class="ctx-section" id="ctx-symptoms">
+                <h3 class="ctx-header" data-toggle="symptoms-body">Symptoms <span class="ctx-count">0</span></h3>
+                <div class="ctx-body" id="symptoms-body"></div>
+            </div>
+            <div class="ctx-section" id="ctx-hypotheses">
+                <h3 class="ctx-header" data-toggle="hypotheses-body">Hypotheses <span class="ctx-count">0</span></h3>
+                <div class="ctx-body" id="hypotheses-body"></div>
+            </div>
+            <div class="ctx-section" id="ctx-evidence">
+                <h3 class="ctx-header" data-toggle="evidence-body">Evidence <span class="ctx-count">0</span></h3>
+                <div class="ctx-body" id="evidence-body"></div>
+            </div>
+            <div class="ctx-section" id="ctx-actions">
+                <h3 class="ctx-header" data-toggle="actions-body">Actions <span class="ctx-count">0</span></h3>
+                <div class="ctx-body" id="actions-body"></div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ── Scripts (loaded as ES modules) ─────────────────────────── -->
+    <script type="module" src="/app.js?v=9"></script>
+</body>
+</html>

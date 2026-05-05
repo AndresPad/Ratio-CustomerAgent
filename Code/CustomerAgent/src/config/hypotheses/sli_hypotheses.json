@@ -2,96 +2,104 @@
   "hypotheses": [
     {
       "id": "HYP-SLI-001",
-      "name": "Outage Caused SLI Breach",
-      "statement": "The SLI breach on '{slo_sli_id}' for subscription '{subscription_id}' in region '{region}' (customer '{customer_name}') with {impacted_resources} impacted resources and avg value {avg_value_across_windows} was caused by an Azure outage affecting that region or service.",
+      "name": "SLI Spike with Full Corroboration",
+      "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources. Other customers have filed support requests and the service team has an active incident — confirming a platform-level issue impacting this customer.",
       "category": "sli",
+      "scope": "widespread",
+      "relevant_sli_categories": [
+        "any"
+      ],
       "expected_symptoms": [
         "SYM-SLI-001",
         "SYM-SLI-002",
+        "SYM-SLI-003",
         "SYM-SLI-004",
-        "SYM-SLI-005",
+        "SYM-SUP-005",
+        "SYM-SUP-006",
+        "SYM-SLI-006",
+        "SYM-SLI-007",
         "SYM-OUT-001",
         "SYM-OUT-002",
-        "SYM-OUT-003",
-        "SYM-OUT-004"
+        "SYM-OUT-003"
       ],
       "min_symptoms_for_match": 3,
+      "required_symptoms": [
+        "SYM-SLI-001",
+        "SYM-SUP-005",
+        "SYM-OUT-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SUP-001"
+      ],
       "evidence_needed": [
-        "ER-OUT-001",
         "ER-SLI-001",
         "ER-SLI-002",
-        "ER-TKT-001"
+        "ER-TKT-002",
+        "ER-OUT-001"
       ],
-      "supporting_signals": "Strongest when SYM-OUT-003 (time overlap ≤60 min between incident ImpactStartDate and SLI EarliestImpactStart) co-occurs with SYM-OUT-002 (confirmed outage). Cross-region (SYM-SLI-005, ≥2 regions) or cross-subscription (SYM-SLI-004, ≥2 subscriptions) patterns strengthen the outage hypothesis. SYM-OUT-004 (incident linked to SupportTicketId) adds direct customer correlation."
+      "supporting_signals": "Strongest proactive signal — SLI degradation corroborated by both other customer SRs and service team incidents. SYM-SLI-002 (cross-region) or SYM-SLI-006/007 (cross-customer) elevate severity. SYM-OUT-002 (confirmed outage) is the strongest incident signal. The SLI category identifies the impact domain. This customer has NOT raised an SR but is confirmed impacted — proactive outreach recommended."
     },
     {
       "id": "HYP-SLI-002",
-      "name": "Configuration Change Caused SLI Breach",
-      "statement": "The SLI breach on '{slo_sli_id}' for subscription '{subscription_id}' in region '{region}' (customer '{customer_name}') with {impacted_resources} impacted resources over {total_impact_duration_min} min was caused by a recent configuration change or deployment.",
+      "name": "SLI Spike with Partial Corroboration",
+      "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources. Partial corroboration found — either other customers have reported issues OR the service team has an incident, but not both.",
       "category": "sli",
+      "relevant_sli_categories": [
+        "any"
+      ],
       "expected_symptoms": [
         "SYM-SLI-001",
         "SYM-SLI-002",
-        "SYM-SLI-003"
+        "SYM-SLI-004",
+        "SYM-SUP-005",
+        "SYM-OUT-001",
+        "SYM-OUT-002"
       ],
       "min_symptoms_for_match": 2,
-      "evidence_needed": [
-        "ER-SLI-001"
+      "required_symptoms": [
+        "SYM-SLI-001"
       ],
-      "supporting_signals": "Strongest when SYM-SLI-003 (≥2 distinct SLIs breached in same subscription+region) appears without cross-subscription or cross-region patterns, suggesting a localized change affected multiple service dimensions. Absence of SYM-OUT-001/002 (no matching incident) further supports this hypothesis."
+      "excluding_symptoms": [
+        "SYM-SUP-001"
+      ],
+      "evidence_needed": [
+        "ER-SLI-001",
+        "ER-SLI-002",
+        "ER-TKT-002",
+        "ER-OUT-001"
+      ],
+      "supporting_signals": "SLI spike plus one corroborating source. If SYM-SUP-005 fires (other SRs) but no incident — the service team hasn't detected the issue yet; this customer's SLI anomaly adds evidence of an emerging problem. If SYM-OUT-001 fires (incident) but no other SRs — there's a known issue and this customer's SLIs indicate they may be affected. Monitor for escalation."
     },
     {
       "id": "HYP-SLI-003",
-      "name": "Capacity Exhaustion Caused SLI Breach",
-      "statement": "The SLI breach on '{slo_sli_id}' for subscription '{subscription_id}' in region '{region}' (customer '{customer_name}') with avg value {avg_value_across_windows} and min value {min_value_across_windows} was caused by capacity exhaustion — resource utilization exceeded safe thresholds.",
+      "name": "SLI Spike with No Corroboration",
+      "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources, but no other customers have reported issues and the service team has no active incidents. This is an isolated anomaly — may be a transient spike, customer-specific workload change, or early warning of an emerging issue.",
       "category": "sli",
+      "scope": "localized",
+      "relevant_sli_categories": [
+        "any"
+      ],
       "expected_symptoms": [
         "SYM-SLI-001",
         "SYM-SLI-002",
-        "SYM-SLI-003"
+        "SYM-SLI-004"
       ],
-      "min_symptoms_for_match": 2,
+      "min_symptoms_for_match": 1,
+      "required_symptoms": [
+        "SYM-SLI-001"
+      ],
+      "excluding_symptoms": [
+        "SYM-SUP-001",
+        "SYM-SUP-005",
+        "SYM-OUT-001"
+      ],
       "evidence_needed": [
         "ER-SLI-001",
-        "ER-LOAD-001"
+        "ER-SLI-002",
+        "ER-TKT-002",
+        "ER-OUT-001"
       ],
-      "supporting_signals": "Strongest when SYM-SLI-002 fires with CRITICAL severity (min_value=0, avg<1.0) or HIGH severity (min_value=0 or avg<10.0), indicating total or near-total resource exhaustion. High impacted_resources count with sustained total_impact_duration_min reinforces this."
-    },
-    {
-      "id": "HYP-SLI-004",
-      "name": "Dependency Failure Caused SLI Breach",
-      "statement": "The SLI breach on '{slo_sli_id}' for subscription '{subscription_id}' in region '{region}' (customer '{customer_name}') was caused by a failure in a downstream dependency — the breach pattern spans multiple subscriptions, regions, or SLIs sharing a common dependency.",
-      "category": "sli",
-      "expected_symptoms": [
-        "SYM-SLI-001",
-        "SYM-SLI-003",
-        "SYM-SLI-004",
-        "SYM-SLI-005"
-      ],
-      "min_symptoms_for_match": 2,
-      "evidence_needed": [
-        "ER-DEP-002",
-        "ER-SLI-001"
-      ],
-      "supporting_signals": "Strongest when SYM-SLI-004 (≥2 subscriptions) or SYM-SLI-005 (≥2 regions) co-occur with SYM-SLI-003 (≥2 SLIs), indicating a shared upstream dependency failure propagating across boundaries. Absence of SYM-OUT-001/002 distinguishes this from a known outage."
-    },
-    {
-      "id": "HYP-SLI-005",
-      "name": "Workload Spike Caused SLI Breach",
-      "statement": "The SLI breach on '{slo_sli_id}' for subscription '{subscription_id}' in region '{region}' (customer '{customer_name}') with {impacted_resources} impacted resources over {total_impact_duration_min} min was caused by an unexpected workload spike exceeding capacity.",
-      "category": "sli",
-      "expected_symptoms": [
-        "SYM-SLI-001",
-        "SYM-SLI-002",
-        "SYM-SUP-001"
-      ],
-      "min_symptoms_for_match": 2,
-      "evidence_needed": [
-        "ER-LOAD-001",
-        "ER-LOAD-002",
-        "ER-SLI-001"
-      ],
-      "supporting_signals": "Strongest when SYM-SLI-002 (severe degradation) appears for a single subscription+region without cross-subscription (SYM-SLI-004) or cross-region (SYM-SLI-005) patterns. SYM-SUP-001 (support case filed) adds customer context. ER-LOAD-002 baseline comparison is critical to confirm abnormal traffic."
+      "supporting_signals": "SLI anomaly with no external corroboration. If SYM-SLI-002 (cross-region) fires, the risk is elevated — the issue spans regions but nobody has reported it yet. If only SYM-SLI-001 (single region), more likely a transient spike or customer workload change. Check ER-SLI-002 (multi-customer view): if other customers' SLIs are stable, this is likely customer-specific; if others also show degradation but haven't reported, this is an early warning of an undetected platform issue."
     }
   ]
 }

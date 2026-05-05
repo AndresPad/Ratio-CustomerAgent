@@ -48,3 +48,37 @@ services:
     depends_on:
       customer-agent:
         condition: service_healthy
+
+  # ── AGL LightningStore (F16) ──────────────────────────────
+  # Persistent rollout/trace store for Agent Lightning training.
+  # SQLite-based in dev; swap to client-server mode for production.
+  agl-lightningstore:
+    image: python:3.11-slim
+    command: >
+      bash -c "pip install agentlightning[apo] --quiet &&
+               python -m agentlightning.store --host 0.0.0.0 --port 8094"
+    ports:
+      - "8094:8094"
+    volumes:
+      - agl-store-data:/data
+    environment:
+      - AGL_STORE_PATH=/data/lightningstore.db
+    restart: unless-stopped
+
+  # ── AGL Dashboard (F17) ──────────────────────────────────
+  # Training visualization dashboard for Agent Lightning.
+  # Reads from LightningStore to show reward curves, prompt versions.
+  agl-dashboard:
+    image: python:3.11-slim
+    command: >
+      bash -c "pip install agentlightning[apo] --quiet &&
+               python -m agentlightning.dashboard --host 0.0.0.0 --port 8095
+               --store-url http://agl-lightningstore:8094"
+    ports:
+      - "8095:8095"
+    restart: unless-stopped
+    depends_on:
+      - agl-lightningstore
+
+volumes:
+  agl-store-data:

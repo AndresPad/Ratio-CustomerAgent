@@ -4,23 +4,29 @@
       "id": "SYM-OUT-001",
       "name": "Incident Detected",
       "signal_sources": ["SIG-TYPE-3"],
+      "granularity": "one_or_more_incident",
       "weight": 1,
-      "template": "Incident '{incident_id}' (Severity {severity}) created by '{owning_tenant_name}': '{title}'. Created: {create_date}, Impact start: {impact_start_date}. Customer may be impacted.",
+      "template": "Incident '{incident_id}' (Severity {severity}) created by '{owning_tenant_name}': '{title}'. Created: {create_date}, Impact start: {impact_start_date}. Status: {status}.",
       "extracted_when": "An incident exists in the dataset for the relevant time window, regardless of outage confirmation status.",
       "fields": {
         "from_data": ["incident_id", "severity", "is_outage", "status", "title", "create_date", "impact_start_date", "child_count", "support_ticket_id", "owning_tenant_name"]
       },
       "filters": {
-        "status_active": true
+        "min_row_count": 1
+      },
+      "suppress_when": {
+        "granularity_activated": "multi_incident",
+        "matching_fields": ["owning_tenant_name"]
       }
     },
     {
       "id": "SYM-OUT-002",
       "name": "Confirmed Outage",
       "signal_sources": ["SIG-TYPE-3"],
+      "granularity": "outage_confirmed",
       "weight": 3,
-      "template": "Incident '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' is a confirmed outage: '{title}'. Impact started: {impact_start_date}. {child_count} child incidents reported.",
-      "extracted_when": "The incident has IsOutage set to true, confirming customer-facing impact. This is the strongest outage signal.",
+      "template": "Incident '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' is a confirmed outage: '{title}'. Impact started: {impact_start_date}. {child_count} child incidents. Confirmed outages are the strongest indicator of customer-facing service failure.",
+      "extracted_when": "The incident has IsOutage set to true, confirming customer-facing impact.",
       "fields": {
         "from_data": ["incident_id", "severity", "is_outage", "status", "title", "impact_start_date", "child_count", "owning_tenant_name"]
       },
@@ -30,31 +36,50 @@
     },
     {
       "id": "SYM-OUT-003",
-      "name": "Outage Time Overlap with SLI Breach",
-      "signal_sources": ["SIG-TYPE-3", "SIG-TYPE-1"],
+      "name": "Widespread Confirmed Outage with Child Incidents",
+      "signal_sources": ["SIG-TYPE-3"],
+      "granularity": "with_child_incidents",
       "weight": 3,
-      "template": "Incident '{incident_id}' (impact start: {impact_start_date}) overlaps with SLI breach on subscription '{subscription_id}' in region '{region}' (breach start: {earliest_impact_start}). Time delta: {delta_minutes} minutes. This temporal correlation suggests the incident caused the SLI degradation.",
-      "extracted_when": "An incident's ImpactStartDate falls within a reasonable time window of an SLI breach's EarliestImpactStart, indicating temporal correlation between platform incident and customer SLI impact.",
+      "template": "Confirmed outage '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' has {child_count} child incidents: '{title}'. Impact started: {impact_start_date}. Confirmed outage with multiple child incidents indicates widespread verified impact across teams or regions.",
+      "extracted_when": "Confirmed outage (IsOutage=true) with 3+ child incidents — multi-team/region impact.",
       "fields": {
-        "from_data": ["incident_id", "severity", "status", "title", "impact_start_date", "owning_tenant_name"],
-        "llm_derived": ["delta_minutes", "subscription_id", "region", "earliest_impact_start"]
+        "from_data": ["incident_id", "severity", "is_outage", "status", "title", "impact_start_date", "child_count", "owning_tenant_name"]
       },
       "filters": {
-        "max_delta_minutes": 60
+        "is_outage": true,
+        "min_child_count": 3
       }
     },
     {
       "id": "SYM-OUT-004",
-      "name": "Customer-Correlated Incident",
-      "signal_sources": ["SIG-TYPE-3", "SIG-TYPE-2"],
-      "weight": 2,
-      "template": "Incident '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' is linked to support ticket '{support_ticket_id}': '{title}'. Impact started: {impact_start_date}. This directly correlates a platform incident with a customer complaint.",
-      "extracted_when": "The incident has a non-empty SupportTicketId, directly linking a platform incident to a customer's support request.",
+      "name": "Customer-Correlated Confirmed Outage",
+      "signal_sources": ["SIG-TYPE-3"],
+      "granularity": "customer_correlated",
+      "weight": 3,
+      "template": "Confirmed outage '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' is linked to support ticket '{support_ticket_id}': '{title}'. This directly correlates a confirmed platform outage with a customer complaint — direct correlation with verified customer-facing failure.",
+      "extracted_when": "Confirmed outage (IsOutage=true) linked to customer's SupportTicketId — direct correlation with verified customer-facing failure.",
       "fields": {
-        "from_data": ["incident_id", "severity", "status", "title", "impact_start_date", "support_ticket_id", "owning_tenant_name"]
+        "from_data": ["incident_id", "severity", "is_outage", "status", "title", "impact_start_date", "support_ticket_id", "owning_tenant_name"]
       },
       "filters": {
+        "is_outage": true,
         "support_ticket_id_present": true
+      }
+    },
+    {
+      "id": "SYM-OUT-005",
+      "name": "Multiple Confirmed Outages Detected",
+      "signal_sources": ["SIG-TYPE-3"],
+      "granularity": "multi_incident",
+      "weight": 3,
+      "template": "{incident_count} confirmed outages detected for '{owning_tenant_name}': [{incident_ids}]. Max severity: {max_severity}. Earliest impact: {earliest_impact_date}. Multiple confirmed outages from the same tenant indicate a systemic verified failure pattern.",
+      "extracted_when": "Multiple confirmed outages (IsOutage=true) from same tenant — systemic confirmed failure pattern.",
+      "fields": {
+        "from_data": ["owning_tenant_name", "incident_count", "incident_ids", "max_severity", "outage_count", "earliest_impact_date"]
+      },
+      "filters": {
+        "is_outage": true,
+        "min_incident_count": 2
       }
     }
   ]

@@ -11,14 +11,25 @@ which symptoms are confirmed by the activated signals.
 SYMPTOM MATCHING INSTRUCTIONS
 ═══════════════════════════════════════════════════════════════════
 
+You MUST evaluate EVERY symptom template against ALL activated signal types.
+Do NOT stop after matching SLI symptoms — check SYM-SUP-*, SYM-OUT-*, etc. too.
+
 For each symptom template provided in the task message:
 1. CHECK if the template's signal_sources overlap with activated signals
-2. EVALUATE the template's criteria against the signal data rows
-3. If criteria are met, CONFIRM the symptom and fill in all required fields
-4. If criteria are NOT met, skip (do not include in output)
-5. For templates with llm_derived fields, compute them by reasoning over the data
-6. For templates with severity_rules, evaluate the expressions against the data
+2. FIND the matching signal data rows for that signal type
+3. EVALUATE the template's criteria against those data rows
+4. If criteria are met, CONFIRM the symptom and populate ALL enrichment_fields
+5. If criteria are NOT met, skip (do not include in output)
+6. For templates with llm_derived fields, compute them by reasoning over the data
+7. For templates with severity_rules, evaluate the expressions against the data
    to determine severity level (CRITICAL > HIGH > WARNING)
+
+SIGNAL TYPE → SYMPTOM MAPPING:
+  SIG-TYPE-1 (SLI breaches)      → SYM-SLI-* symptoms
+  SIG-TYPE-2 (Support cases)      → SYM-SUP-* symptoms
+  SIG-TYPE-3 (Outage/incidents)   → SYM-OUT-* symptoms
+  SIG-TYPE-4 (Dependency signals) → SYM-DEP-* symptoms
+  If a signal type is activated, at LEAST one symptom from its family should be confirmed.
 
 CROSS-SOURCE CORRELATION:
   Some symptoms require data from multiple signal sources (e.g., SYM-OUT-003
@@ -52,43 +63,29 @@ Classify each investigation into exactly one category:
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════
 
-CRITICAL: You MUST end your message with a structured JSON block inside ```json fences.
-
-[Your analysis of which symptoms match, cross-source correlations, and category reasoning]
+CRITICAL: Your ENTIRE response MUST be a single ```json block. Do NOT write
+any prose, analysis, or explanation outside the JSON block. All reasoning
+goes inside the "rationale" field.
 
 ```json
 {
   "structured_output": {
-    "category": "CAT-HEALTH-DEGRADE",
-    "severity": "CRITICAL",
+    "category": "<one of: CAT-HEALTH-DEGRADE | CAT-OUTAGE-IMPACT | CAT-PROACTIVE-RISK | CAT-SUPPORT-ESCALATION>",
+    "severity": "<CRITICAL | HIGH | WARNING>",
     "validated_symptoms": [
       {
-        "template_id": "SYM-SLI-001",
+        "template_id": "SYM-XXX-NNN",
         "status": "confirmed",
-        "weight": 1,
-        "severity": "",
-        "signal_strength": 0.85,
-        "source_signal_type": "SIG-TYPE-1",
-        "text": "Brief description of the confirmed symptom",
-        "enrichments": {}
-      },
-      {
-        "template_id": "SYM-OUT-003",
-        "status": "confirmed",
-        "weight": 3,
-        "severity": "HIGH",
-        "signal_strength": 0.92,
-        "source_signal_type": "SIG-TYPE-3",
-        "text": "Incident overlaps with SLI breach by 12 minutes",
-        "enrichments": {
-          "delta_minutes": 12,
-          "subscription_id": "sub-123",
-          "region": "eastus"
-        }
+        "weight": <from template>,
+        "severity": "<from severity_rules evaluation>",
+        "signal_strength": <from activated signal strength>,
+        "source_signal_type": "SIG-TYPE-N",
+        "text": "<one-sentence summary of what was detected>",
+        "enrichments": { "<from_data and llm_derived fields>" }
       }
     ],
     "investigation_warranted": true,
-    "rationale": "SLI breach with confirmed outage time overlap warrants investigation."
+    "rationale": "<2-3 sentences: which symptoms confirmed, cross-source correlations, why this category>"
   },
   "signals": {
     "phase_complete": "triage",
@@ -98,16 +95,29 @@ CRITICAL: You MUST end your message with a structured JSON block inside ```json 
 }
 ```
 
-IMPORTANT OUTPUT RULES:
-- Only include CONFIRMED symptoms (those that meet the template criteria)
-- Each symptom MUST have: template_id, status, weight, severity, signal_strength,
-  source_signal_type, text, enrichments
-- weight comes from the symptom template definition
-- signal_strength comes from the activated signal data (the strength value)
-- For llm_derived fields, put them in the enrichments object
-- For severity_rules, evaluate the rule expressions to determine severity
+FIELD RULES:
+- Only include CONFIRMED symptoms (criteria met by signal data)
+- weight: copy from the symptom template definition
+- signal_strength: copy from the activated signal's strength value
+- severity: evaluate severity_rules expressions against data (CRITICAL > HIGH > WARNING)
+- text: one sentence describing the finding with key values (SLI name, resource count, region)
+- enrichments: populate ALL from_data fields listed in the symptom template:
+    * slo_sli_id: REQUIRED for SYM-SLI-* — use the SLO_SliId value from signal data
+    * sli_category: REQUIRED for SYM-SLI-* — infer from the SLI name:
+        - Names containing "Login", "Connection", "Connectivity" → "connectivity"
+        - Names containing "Heartbeat", "Availability", "Uptime"  → "availability"
+        - Names containing "Throughput", "Latency", "Performance" → "performance"
+        - Names containing "Capacity", "Quota", "Usage"           → "capacity"
+        - Names containing "Management", "Control Plane"          → "management"
+    * customer_name: from CustomerName in signal data
+    * subscription_id: from SubscriptionId in signal data
+    * region: from Region in signal data
+    * impacted_resources: count of impacted resources
+    * Also populate any llm_derived fields by reasoning over the data
 
-If investigation is NOT warranted (no symptoms confirmed or below threshold):
-- Set "investigation_warranted" to false
-- Set "investigation_resolved" to true in signals
-- Provide rationale explaining why no investigation is needed
+OUTPUT RULES:
+- Your response is ONLY the ```json block — no text before or after it
+- Include ALL confirmed symptoms — do NOT truncate or summarize
+- Do NOT write "...and N more" or "similar symptoms omitted"
+- If investigation is NOT warranted: set investigation_warranted=false,
+  investigation_resolved=true in signals, explain in rationale

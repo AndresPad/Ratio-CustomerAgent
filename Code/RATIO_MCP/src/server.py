@@ -105,7 +105,7 @@ def _run_http() -> None:
     host = os.environ.get("MCP_SERVER_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_SERVER_PORT", os.environ.get("PORT", "8000")))
     logger.info("Starting Ratio MCP server on %s:%d", host, port)
-    mcp_app = mcpserver.http_app(path="/mcp")
+    mcp_app = mcpserver.http_app(path="/mcp", stateless_http=True)
 
     # Register REST API routes and health endpoint on the raw Starlette app
     # BEFORE wrapping with middleware (middleware wrappers lack .routes).

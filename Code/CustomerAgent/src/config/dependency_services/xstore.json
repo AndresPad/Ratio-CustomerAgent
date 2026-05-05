@@ -6,22 +6,27 @@
   "sli_symptoms": [
     {
       "sliId": "Disk.Direct Drive Disk failure SLO - Single Disk.Signal",
+      "sli_category": "availability",
       "symptoms": ["Disk I/O errors on VM", "VM OS or data disk becomes unresponsive"]
     },
     {
       "sliId": "XStore Success Rate.Success Rate.Signal",
+      "sli_category": "availability",
       "symptoms": ["Disk I/O errors on VM", "VM OS or data disk becomes unresponsive"]
     },
     {
       "sliId": "Disk.Disk failure SLO - Single Disk.Signal",
+      "sli_category": "availability",
       "symptoms": ["Disk I/O errors on VM", "VM OS or data disk becomes unresponsive"]
     },
     {
       "sliId": "XStore Success Rate.Container Success Rate.Signal",
+      "sli_category": "availability",
       "symptoms": ["VM OS disk becomes unresponsive", "VM fails to boot or crashes"]
     },
     {
       "sliId": "Disk.XStore DIsk Availablity SLO - Data Center.Signal",
+      "sli_category": "availability",
       "symptoms": ["Disk I/O errors on VM", "VM OS or data disk becomes unresponsive", "VM fails to boot or crashes"]
     }
   ]

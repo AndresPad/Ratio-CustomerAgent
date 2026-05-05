@@ -16,7 +16,9 @@ AVAILABLE MCP TOOLS
 
 1. collect_support_request_tool
    - Support tickets (ICM, CritSit, customer-reported issues)
-   - Parameters: customer_name (optional), lookback_hours (optional, default '4h'),
+   - Parameters: customer_name (optional),
+     start_time (ISO8601 UTC, e.g. '2024-01-15T10:00:00Z'),
+     end_time (ISO8601 UTC, e.g. '2024-01-15T14:00:00Z'),
      support_product_names (optional, JSON array string e.g. '["Azure Kubernetes Service (AKS)"]')
    - Returns: ticket list with severity, status, category, creation time,
      description, customer impact, resolution status
@@ -70,15 +72,46 @@ After collecting raw data, synthesize findings:
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════
 
-Return a condensed findings summary. Include:
+CRITICAL: You MUST end your response with a structured JSON block inside
+```json fences. Free-text summaries without a JSON block are INVALID.
 
-- Which ERs were fulfilled and which used existing signal data
-- Ticket counts by severity (CritSit / High / Moderate / Low)
-- Customer-specific vs cross-customer breakdown
-- Dominant failure category and whether it matches the hypothesis
-- CritSit alerts (if any): ID, status, owning team
-- Ticket filing pattern: isolated complaints vs spike
-- Preliminary relevance to the hypothesis (supports / inconclusive / weakens)
+Structure your response as:
 
-Keep the summary concise — the reasoner agent will do the deep interpretation.
-Focus on FACTS and PATTERNS, not speculation.
+[Brief narrative summary of findings — 3-5 sentences max]
+
+```json
+{
+  "er_results": [
+    {
+      "er_id": "ER-TKT-001 | ER-TKT-002",
+      "status": "collected | from_signal | unavailable",
+      "source": "tool_name or 'signal_data'",
+      "findings": {
+        "ticket_counts": {"critsit": 0, "high": 0, "moderate": 0, "low": 0},
+        "scope": "customer_specific | cross_customer",
+        "dominant_category": "connectivity | performance | availability | other",
+        "category_matches_hypothesis": true,
+        "ticket_pattern": "isolated | spike | recurring",
+        "critsit_alerts": [
+          {
+            "critsit_id": "string",
+            "status": "Active | Resolved",
+            "owning_team": "string"
+          }
+        ]
+      },
+      "summary": "One-line finding"
+    }
+  ],
+  "preliminary_relevance": "supports | inconclusive | weakens",
+  "relevance_reasoning": "One sentence explaining why"
+}
+```
+
+Field rules:
+- er_results MUST contain one entry per ER-ID you were asked to collect.
+- Set status="from_signal" for ERs fulfilled by existing signal data.
+- Set status="unavailable" with summary explaining why if collection failed.
+- critsit_alerts array may be empty if no CritSits found.
+- Keep the narrative summary ABOVE the JSON block brief — the JSON is the
+  authoritative output. The reasoner will interpret it.
