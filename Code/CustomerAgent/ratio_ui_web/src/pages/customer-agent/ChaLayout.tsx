@@ -13,7 +13,8 @@ const PAGE_TITLES: Record<string, string> = {
   'investigation-flow-v2': 'Neural Canvas v2',
   'investigation-flow/detail': 'Neural Canvas v3',
   'neural-canvas': 'Neural Canvas',
-  'neural-canvas-demo': 'Neural Canvas Demo',
+  'neural-canvas-demo': 'Neural Canvas - Demo',
+  'neural-canvas-live': 'Neural Canvas - Live',
   'history': 'History',
   'agents': 'Agent Registry',
   'config': 'Configuration',
@@ -33,7 +34,8 @@ const NAV: readonly NavItem[] = [
   // Restore by removing the comment when we want it back in the menu.
   // The route /customer-agent/neural-canvas remains accessible by URL.
   // { to: 'neural-canvas',      icon: 'fa-circle-nodes',    label: 'Neural Canvas' },
-  { to: 'neural-canvas-demo', icon: 'fa-circle-nodes',    label: 'Neural Canvas' },
+  { to: 'neural-canvas-demo', icon: 'fa-circle-nodes',    label: 'Neural Canvas - Demo' },
+  { to: 'neural-canvas-live', icon: 'fa-circle-nodes',    label: 'Neural Canvas - Live' },
   { section: 'INVESTIGATIONS' },
   { to: 'active',    icon: 'fa-play-circle', label: 'Active Investigation' },
   { to: 'scenarios', icon: 'fa-flask',       label: 'Simulation Scenarios' },

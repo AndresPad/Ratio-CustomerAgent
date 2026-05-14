@@ -23,7 +23,7 @@ import ChaFlowDetailPage from './pages/customer-agent/ChaFlowDetailPage';
 import ChaNeuralCanvasPage from './pages/customer-agent/ChaNeuralCanvasPage';
 import ChaNeuralCanvasV2Page from './pages/customer-agent/ChaNeuralCanvasV2Page';
 import ChaNeuralCanvasDemoPage from './pages/customer-agent/ChaNeuralCanvasDemoPage';
-import { InvestigationFlowPage } from './pages/neeraj-version/InvestigationFlowPage';
+import ChaNeuralCanvasLivePage from './pages/customer-agent/ChaNeuralCanvasLivePage';
 
 class ErrorBoundaryInner extends Component<{ children: ReactNode; location: string }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -54,12 +54,13 @@ function AppLayout() {
   const isCustomerAgent = location.pathname.startsWith('/customer-agent');
   const isInvestigationFlow = location.pathname.startsWith('/investigation-flow');
 
-  // Investigation Reasoning Flow — standalone dark-themed page
+  // Investigation Reasoning Flow — standalone page was removed upstream;
+  // redirect any direct hits to the in-app investigation flow exec page.
   if (isInvestigationFlow) {
     return (
       <ErrorBoundary>
         <Routes>
-          <Route path="/investigation-flow" element={<InvestigationFlowPage />} />
+          <Route path="/investigation-flow" element={<Navigate to="/customer-agent/investigation-flow" replace />} />
         </Routes>
       </ErrorBoundary>
     );
@@ -88,7 +89,9 @@ function AppLayout() {
             <Route path="neural-canvas/:xcv" element={<ChaNeuralCanvasPage />} />
             <Route path="neural-canvas-demo" element={<ChaNeuralCanvasDemoPage />} />
             <Route path="neural-canvas-demo/:xcv" element={<ChaNeuralCanvasDemoPage />} />
-            <Route path="investigation-flow/deep-dive" element={<InvestigationFlowPage />} />
+            <Route path="neural-canvas-live" element={<ChaNeuralCanvasLivePage />} />
+            <Route path="neural-canvas-live/:xcv" element={<ChaNeuralCanvasLivePage />} />
+            <Route path="investigation-flow/deep-dive" element={<ChaFlowDetailPage />} />
             <Route path="investigation-flow/:xcv" element={<ChaFlowDetailPage />} />
           </Route>
         </Routes>

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Start all services for local development.
 
@@ -25,6 +25,7 @@ param(
 $ErrorActionPreference = "SilentlyContinue"
 $ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $VENV = Join-Path $ROOT ".venv\Scripts\Activate.ps1"
+$PYEXE = Join-Path $ROOT ".venv\Scripts\python.exe"
 
 # ── Colors ──
 function Write-Header($msg) { Write-Host "`n━━━ $msg ━━━" -ForegroundColor Cyan }
@@ -66,31 +67,28 @@ $jobs = @()
 
 # 0. RATIO MCP server (port 8000)
 $jobs += Start-Job -Name "ratio-mcp" -ScriptBlock {
-    param($root, $venv)
+    param($root, $pyexe)
     Set-Location (Join-Path $root "Code\RATIO_MCP\src")
-    & $venv
     $env:PYTHONPATH = (Join-Path $root "Code\RATIO_MCP\src")
-    python server.py 2>&1
-} -ArgumentList $ROOT, $VENV
+    & $pyexe server.py 2>&1
+} -ArgumentList $ROOT, $PYEXE
 Write-Ok "ratio-mcp -> http://127.0.0.1:8000"
 
 # 1. CustomerAgent server (port 8503)
 $jobs += Start-Job -Name "customer-agent" -ScriptBlock {
-    param($root, $venv)
+    param($root, $pyexe)
     Set-Location (Join-Path $root "Code\CustomerAgent\src")
-    & $venv
     $env:PYTHONPATH = (Join-Path $root "Code\CustomerAgent\src")
-    python -m uvicorn server.app:app --host 127.0.0.1 --port 8503 2>&1
-} -ArgumentList $ROOT, $VENV
+    & $pyexe -m uvicorn server.app:app --host 127.0.0.1 --port 8503 2>&1
+} -ArgumentList $ROOT, $PYEXE
 Write-Ok "customer-agent → http://127.0.0.1:8503"
 
 # 2. CustomerAgent UI server (port 5020)
 $jobs += Start-Job -Name "customer-agent-ui" -ScriptBlock {
-    param($root, $venv)
+    param($root, $pyexe)
     Set-Location (Join-Path $root "Code\CustomerAgent\CustomerAgentUI")
-    & $venv
-    python server.py 2>&1
-} -ArgumentList $ROOT, $VENV
+    & $pyexe server.py 2>&1
+} -ArgumentList $ROOT, $PYEXE
 Write-Ok "customer-agent-ui → http://127.0.0.1:5020"
 
 # 3. React UI — Vite dev server (port 3010)
