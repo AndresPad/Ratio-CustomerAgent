@@ -301,6 +301,16 @@ Never create service-local middleware — extend the shared stack.
 | Raw `os.environ` | Use `pydantic-settings` BaseSettings |
 | Unpinned deps | Always pin in `requirements.txt` |
 | Moving Python packages deeper | Update `_CONFIG_DIR` (add `..` per level), relative imports (add `.` per level), `__init__.py` re-exports, and `@patch` target paths in tests |
+| MAF `Message(content=...)` | Wrong — use `Message(role, contents=[...])` (plural `contents`, a Sequence). `content=` is not a valid kwarg |
+| MAF `agent.get_response()` | Wrong — use `agent.run(messages)`. Returns `AgentResponse` with `.text` property (not `.content`) |
+| `asyncio.run()` in AGL rollout | Correct for training scripts (no existing event loop). Don't use inside FastAPI/uvicorn — use `await` instead |
+| AGL `apo.get_best_prompt()` | Does NOT exist. `APO` has no public methods. Extract optimized prompt via `trainer.client.get_latest_resources()` (`LightningStore`) |
+| AGL default models | Defaults are `gpt-5-mini`/`gpt-4.1-mini`, not `gpt-4o`. Override explicitly in `APO(proposer_model=..., scorer_model=...)` |
+| AGL import latency | `import agentlightning` takes 10-15s on first run (large dependency tree). Terminal commands with AGL imports may timeout at 15s |
+| AGL deque monkey-patch duplication | The `SharedMemoryExecutionStrategy._run_runner` retry patch exists in THREE files: `run_apo.py`, `run_apo_all.py`, and `run_online.py`. Extract to `src/learning/compat.py` when touching any of them |
+| Dual `.env` files out of sync | RATIO-AI has TWO `.env` files: root `RATIO-AI/.env` and `Code/CustomerAgent/.env`. Both contain sandbox/pool endpoint vars (`PYTHON_CUSTOM_POOL_*`). When updating one, always update both |
+| Dynamic Sessions ≠ Container Apps | `Microsoft.App/sessionPools` (PythonLTS) are NOT regular Container Apps Environments. Use `az containerapp sessionpool` commands, not `az containerapp env`. Auth scope is `https://dynamicsessions.io/.default` |
+| Sandbox coder → reasoner output gap | **RESOLVED (phases 1-5).** `analysis_strategies_config.json` defines 8 reusable techniques with confidence mappings; prompt rewritten to require per-ER confidence scores (0.0–1.0) and 6-point verdicts. Boolean-check code is now explicitly forbidden in the prompt. If output reverts to booleans, check the TECHNIQUE LIBRARY section of `investigation_sandbox_coder_prompt.txt` |
 
 ---
 
@@ -318,6 +328,46 @@ Agent definitions are in `.github/agents/`:
 - `qa` — Testing, code review, linting
 
 Targeted instructions in `.github/instructions/` load automatically by file path.
+
+---
+
+## Agent & Skill Routing (MANDATORY)
+
+When a user request matches one of the patterns below, **always propose the matching skill or agent at the start of your response** before doing the work yourself. Do not hand-write code that a skill would scaffold, and do not skip QA review on merge-bound changes.
+
+### Skill routing — propose `/skills <name>` when the task matches
+
+| Trigger phrase / intent | Skill to propose |
+|---|---|
+| "add a tool", "new `@tool`", "create a Kusto/Cosmos/etc. tool" | `new-agent-tool` |
+| "add an agent", "new agent", "create a BaseAgent subclass" | `new-agent` |
+| "add an endpoint", "new FastAPI route", "expose `/foo` API" | `new-api-endpoint` |
+| "add a page", "new React route", "create a `<Foo>Page`" | `new-react-page` |
+
+### Agent routing — propose `/agent <name>` when the task matches
+
+| Situation | Agent to propose |
+|---|---|
+| Backend Python / FastAPI / Agent Framework work | `/agent engineer` |
+| React / TypeScript / Vite / UI work under `Code/Frontend/` | `/agent frontend` |
+| Before merging, after any non-trivial change, or when the user asks for review / tests / lint | `/agent qa` |
+
+### How to propose
+
+Open the response with one short line, e.g.:
+
+> This task matches the **`new-agent-tool`** skill — recommend running `/skills new-agent-tool` so the scaffold enforces service-local imports and `@tool` conventions. Proceeding with that pattern now.
+
+Then continue with the work. If the user declines or the skill isn't a fit, fall back to direct implementation but still apply the conventions the skill would have enforced (service-local imports, `BaseAgent` + `@register_agent`, `try/except ImportError` for `Code.Shared.*`, etc.).
+
+### QA gate
+
+Before declaring a code-change task "done" (especially before commit/PR), propose `/agent qa` to review:
+- Test coverage for new behavior
+- Async/await correctness (no `requests`, no `time.sleep`)
+- Import style (service-local vs. `Code.Shared.*` with fallback)
+- Logging (`logging.getLogger(__name__)`, no `print()`)
+- Security (no `allow_origins=["*"]`, no committed secrets)
 # GitHub Copilot Instructions
 
 ## Project Overview
@@ -383,6 +433,13 @@ except ImportError:
 - **Print statements**: Never use `print()` — use `logging.getLogger(__name__)`
 - **Middleware location**: All agent middleware lives in `Code/Shared/middleware/`. Import via `from Code.Shared.middleware import build_default_middleware`
 - **Moving Python packages deeper**: Update `_CONFIG_DIR` (add `..` per level), relative imports (add `.` per level), `__init__.py` re-exports, and `@patch` target paths in tests
+- **MAF `Message(content=...)`**: Wrong — use `Message(role, contents=[...])` (plural `contents`, a Sequence). `content=` is not a valid kwarg
+- **MAF `agent.get_response()`**: Wrong — use `agent.run(messages)`. Returns `AgentResponse` with `.text` property (not `.content`)
+- **`asyncio.run()` in AGL rollout**: Correct for training scripts (no existing event loop). Don't use inside FastAPI/uvicorn — use `await` instead
+- **AGL `apo.get_best_prompt()`**: Does NOT exist. `APO` has no public methods. Extract optimized prompt via `trainer.client.get_latest_resources()` (`LightningStore`)
+- **AGL default models**: Defaults are `gpt-5-mini`/`gpt-4.1-mini`, not `gpt-4o`. Override explicitly in `APO(proposer_model=..., scorer_model=...)`
+- **AGL import latency**: `import agentlightning` takes 10-15s on first run (large dependency tree). Terminal commands may timeout
+- **AGL deque monkey-patch duplication**: The `SharedMemoryExecutionStrategy._run_runner` retry patch exists in THREE files: `run_apo.py`, `run_apo_all.py`, and `run_online.py`. Extract to `src/learning/compat.py` when touching any of them
 
 ## Service Ports (Source of truth: `docker-compose.yml`)
 
