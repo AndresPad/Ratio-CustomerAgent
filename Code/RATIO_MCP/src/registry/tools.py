@@ -78,8 +78,13 @@ def _load_kql_query(filename: str) -> str:
 def _make_tsql_handler(entry: dict):
     """Build an async handler for a T-SQL tool config entry.
 
-    Supports optional endpoint_env / database_env in config to target
-    different SQL endpoints (e.g. Fabric lakehouse vs Synapse).
+    Endpoint targeting:
+      * Single-endpoint mode (legacy): set `endpoint_env` / `database_env`
+        at the top of the entry. Tool exposes only `query` and `max_rows`.
+      * Multi-endpoint mode: set an `endpoints` map (alias → {endpoint_env,
+        database_env}) plus `default_endpoint`. Tool exposes an
+        `endpoint_alias` parameter restricted to the configured aliases
+        (server-side allow-list \u2014 agents cannot target arbitrary endpoints).
     """
     blocked_prefixes = tuple(
         p.lower() + " " for p in entry.get("blocked_prefixes", [])
@@ -87,13 +92,29 @@ def _make_tsql_handler(entry: dict):
     params = entry.get("parameters", {})
     default_max_rows = params.get("max_rows", {}).get("default", 100)
 
-    # Resolve endpoint/database from env vars specified in config (or None → defaults)
-    endpoint_env = entry.get("endpoint_env")
-    database_env = entry.get("database_env")
-    sql_endpoint = os.getenv(endpoint_env) if endpoint_env else None
-    sql_database = os.getenv(database_env) if database_env else None
+    # Resolve endpoint topology
+    endpoints_map: dict[str, dict] = entry.get("endpoints") or {}
+    if endpoints_map:
+        default_alias = entry.get("default_endpoint") or next(iter(endpoints_map))
+        if default_alias not in endpoints_map:
+            raise ValueError(
+                f"{entry['name']}: default_endpoint '{default_alias}' not in endpoints map"
+            )
+    else:
+        # Legacy single-endpoint shape
+        default_alias = "_default"
+        endpoints_map = {
+            default_alias: {
+                "endpoint_env": entry.get("endpoint_env"),
+                "database_env": entry.get("database_env"),
+            }
+        }
 
-    async def handler(query: str, max_rows: Optional[int] = default_max_rows) -> str:
+    async def handler(
+        query: str,
+        max_rows: Optional[int] = default_max_rows,
+        endpoint_alias: Optional[str] = None,
+    ) -> str:
         import helper.lakehouse as lakehouse
         logger.debug("%s invoked", entry["name"])
         if not query or not query.strip():
@@ -101,9 +122,29 @@ def _make_tsql_handler(entry: dict):
         lowered = query.strip().lower()
         if blocked_prefixes and lowered.startswith(blocked_prefixes):
             return json.dumps({"error": f"Destructive statements are blocked by {entry['name']}."})
+
+        # Resolve endpoint from allow-listed alias
+        alias = (endpoint_alias or default_alias).strip()
+        target = endpoints_map.get(alias)
+        if target is None:
+            allowed = ", ".join(sorted(k for k in endpoints_map if k != "_default"))
+            return json.dumps({
+                "error": f"Unknown endpoint_alias '{alias}'. Allowed: {allowed}"
+            })
+
+        endpoint_env = target.get("endpoint_env")
+        database_env = target.get("database_env")
+        app_id_env = target.get("app_id_env")
+        sql_endpoint = os.getenv(endpoint_env) if endpoint_env else None
+        sql_database = os.getenv(database_env) if database_env else None
+        sql_app_id = os.getenv(app_id_env) if app_id_env else None
+
         xcv = get_current_xcv() or generate_xcv()
         mcp_log = MCPLogger.get_instance()
-        mcp_log.log_tool_call_start(xcv, entry["name"], {"query": query, "max_rows": max_rows})
+        mcp_log.log_tool_call_start(
+            xcv, entry["name"],
+            {"query": query, "max_rows": max_rows, "endpoint_alias": alias},
+        )
         _t0 = _time.monotonic()
         try:
             token = user_token_var.get(None)
@@ -112,6 +153,7 @@ def _make_tsql_handler(entry: dict):
             rows = lakehouse.run_tsql_query(
                 query, user_token=token,
                 endpoint=sql_endpoint, database=sql_database,
+                app_id=sql_app_id,
             )
             if max_rows is not None and isinstance(max_rows, int) and max_rows >= 0:
                 rows = rows[:max_rows]
@@ -127,6 +169,25 @@ def _make_tsql_handler(entry: dict):
             mcp_log.log_query_executed(xcv, entry["name"], "tsql", query, error=str(e), duration_ms=elapsed)
             mcp_log.log_tool_call_end(xcv, entry["name"], error=str(e), duration_ms=elapsed)
             return json.dumps({"error": str(e)})
+
+    # When multi-endpoint mode is active, expose a typed signature so FastMCP
+    # advertises `endpoint_alias` in the JSON schema.
+    if entry.get("endpoints"):
+        sig_params = [
+            inspect.Parameter("query", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=str),
+            inspect.Parameter(
+                "max_rows", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=default_max_rows, annotation=int,
+            ),
+            inspect.Parameter(
+                "endpoint_alias", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=default_alias, annotation=str,
+            ),
+        ]
+        handler.__signature__ = inspect.Signature(sig_params, return_annotation=str)
+        handler.__annotations__ = {
+            "query": str, "max_rows": int, "endpoint_alias": str, "return": str,
+        }
 
     return handler
 
@@ -190,6 +251,136 @@ def _build_signature(params_spec: dict) -> inspect.Signature:
             annotation=annotation,
         ))
     return inspect.Signature(params, return_annotation=str)
+
+
+def _make_kusto_query_handler(entry: dict):
+    """Build an async handler for an ad-hoc KQL query tool.
+
+    Unlike `_make_kusto_handler`, the query text is supplied at call time by
+    the agent (analogous to `_make_tsql_handler`). Destructive control
+    commands (`.drop`, `.delete`, etc.) are blocked.
+
+    Cluster targeting:
+      * Single-cluster mode (legacy): set `cluster_env` / `database_env` /
+        `cert_client_id_env` at the top of the entry. Tool exposes only
+        `query` and `max_rows`.
+      * Multi-cluster mode: set a `clusters` map (alias → {cluster_env,
+        database_env, cert_client_id_env}) plus `default_cluster`. Tool
+        exposes a `cluster_alias` parameter restricted to the configured
+        aliases (server-side allow-list \u2014 agents cannot target arbitrary
+        clusters).
+    """
+    blocked_prefixes = tuple(
+        p.lower() for p in entry.get("blocked_prefixes", [])
+    )
+    params = entry.get("parameters", {})
+    default_max_rows = params.get("max_rows", {}).get("default", 200)
+
+    # Resolve cluster topology
+    clusters_map: dict[str, dict] = entry.get("clusters") or {}
+    if clusters_map:
+        default_alias = entry.get("default_cluster") or next(iter(clusters_map))
+        if default_alias not in clusters_map:
+            raise ValueError(
+                f"{entry['name']}: default_cluster '{default_alias}' not in clusters map"
+            )
+    else:
+        # Legacy single-cluster shape
+        default_alias = "_default"
+        clusters_map = {
+            default_alias: {
+                "cluster_env": entry["cluster_env"],
+                "database_env": entry["database_env"],
+                "cert_client_id_env": entry.get("cert_client_id_env"),
+            }
+        }
+
+    async def handler(
+        query: str,
+        max_rows: Optional[int] = default_max_rows,
+        cluster_alias: Optional[str] = None,
+    ) -> str:
+        from helper.kusto_auth import get_kusto_client
+        from azure.kusto.data import ClientRequestProperties
+
+        logger.debug("%s invoked", entry["name"])
+        if not query or not query.strip():
+            return json.dumps({"error": "Query string is required."})
+
+        # Block destructive Kusto control commands.
+        lowered = query.strip().lower()
+        if blocked_prefixes and any(lowered.startswith(p) for p in blocked_prefixes):
+            return json.dumps({"error": f"Destructive statements are blocked by {entry['name']}."})
+
+        # Resolve cluster from allow-listed alias
+        alias = (cluster_alias or default_alias).strip()
+        target = clusters_map.get(alias)
+        if target is None:
+            allowed = ", ".join(sorted(k for k in clusters_map if k != "_default"))
+            return json.dumps({
+                "error": f"Unknown cluster_alias '{alias}'. Allowed: {allowed}"
+            })
+
+        cluster = os.getenv(target["cluster_env"])
+        database = os.getenv(target["database_env"])
+        if not cluster:
+            return json.dumps({"error": f"{target['cluster_env']} environment variable is required."})
+        if not database:
+            return json.dumps({"error": f"{target['database_env']} environment variable is required."})
+
+        xcv = get_current_xcv() or generate_xcv()
+        mcp_log = MCPLogger.get_instance()
+        mcp_log.log_tool_call_start(
+            xcv, entry["name"],
+            {"query": query, "max_rows": max_rows, "cluster_alias": alias},
+        )
+        _t0 = _time.monotonic()
+        try:
+            cert_env = target.get("cert_client_id_env")
+            cert_client_id = os.getenv(cert_env) if cert_env else None
+            client = get_kusto_client(cluster, cert_client_id=cert_client_id)
+            crp = ClientRequestProperties()
+            response = client.execute(database, query, crp)
+            primary = response.primary_results[0]
+            columns = [c.column_name for c in primary.columns]
+            rows = [{columns[i]: row[i] for i in range(len(columns))} for row in primary.rows]
+            rows = _sanitize_rows(rows)
+            total_rows = len(rows)
+            if max_rows is not None and isinstance(max_rows, int) and max_rows >= 0 and len(rows) > max_rows:
+                rows = rows[:max_rows]
+                logger.info("%s: truncated %d rows → %d (max_rows=%d)", entry["name"], total_rows, len(rows), max_rows)
+            elapsed = (_time.monotonic() - _t0) * 1000
+            result = json.dumps({"rows": rows, "count": len(rows), "total_count": total_rows}, ensure_ascii=False)
+            mcp_log.log_query_executed(xcv, entry["name"], "kusto", query, row_count=len(rows), duration_ms=elapsed)
+            mcp_log.log_tool_call_end(xcv, entry["name"], result=result, duration_ms=elapsed)
+            return result
+        except Exception as e:
+            elapsed = (_time.monotonic() - _t0) * 1000
+            logger.error("%s failed: %s", entry["name"], e, exc_info=True)
+            mcp_log.log_query_executed(xcv, entry["name"], "kusto", query, error=str(e), duration_ms=elapsed)
+            mcp_log.log_tool_call_end(xcv, entry["name"], error=str(e), duration_ms=elapsed)
+            return json.dumps({"error": str(e)})
+
+    # When multi-cluster mode is active, expose a typed signature so FastMCP
+    # advertises `cluster_alias` (with enum) in the JSON schema.
+    if entry.get("clusters"):
+        sig_params = [
+            inspect.Parameter("query", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=str),
+            inspect.Parameter(
+                "max_rows", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=default_max_rows, annotation=int,
+            ),
+            inspect.Parameter(
+                "cluster_alias", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=default_alias, annotation=str,
+            ),
+        ]
+        handler.__signature__ = inspect.Signature(sig_params, return_annotation=str)
+        handler.__annotations__ = {
+            "query": str, "max_rows": int, "cluster_alias": str, "return": str,
+        }
+
+    return handler
 
 
 def _make_kusto_handler(entry: dict):
@@ -382,6 +573,8 @@ def _register_tools() -> list[str]:
             handler = _make_tsql_handler(entry)
         elif tool_type == "kusto":
             handler = _make_kusto_handler(entry)
+        elif tool_type == "kusto_query":
+            handler = _make_kusto_query_handler(entry)
         elif tool_type == "plugin":
             handler = _wrap_plugin_handler(
                 _load_plugin(entry["module"], entry["entry_function"]), name,

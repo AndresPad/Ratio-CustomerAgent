@@ -1,101 +1,129 @@
-"""Stage 2: Aggregation Script Builder — generates deterministic Python scripts for sandbox.
+"""Stage 2: Aggregation Script Builder — generates a deterministic, pure-compute Python script.
 
-Reads the signal_template.json granularity config and produces a self-contained
-Python script that:
-1. Reads raw JSON from Stage 1 files
-2. Groups rows by granularity.group_by
-3. Computes aggregates (count_distinct, sum, avg, etc.)
-4. Writes one aggregated JSON file per granularity
+The generated script does NO IO. It receives raw rows via the injected
+``RAW_DATA`` constant (a ``dict[type_id, list[row]]``) and emits the
+aggregated result as a single line to stdout, framed by sentinel markers
+so the host can parse it deterministically:
+
+    __AGG_BEGIN__{"<type_id>": {"<granularity>": [...]}}__AGG_END__
+
+This mirrors the same pattern used for evidence collection: ALL ADLS IO
+happens host-side using ``DefaultAzureCredential``; the sandbox container
+only runs untrusted compute. As a result the container image needs only
+the Python stdlib — no ``azure-storage-file-datalake``, no token shim,
+no extra RBAC.
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
 from core.models.signals.data_fetch_manifest import DataFetchManifest
 
 logger = logging.getLogger(__name__)
 
+# Sentinel markers the host uses to extract the aggregated payload
+# from the script's stdout. Keep in sync with
+# ``signal_builder._parse_sandbox_aggregation_output``.
+RESULT_BEGIN = "__AGG_BEGIN__"
+RESULT_END = "__AGG_END__"
+
 
 def build_aggregation_script(
     manifest: DataFetchManifest,
     template: dict[str, Any],
 ) -> str:
-    """Generate a standalone Python script that aggregates raw signal data.
-
-    The generated script uses only stdlib (json, os, collections) so it can
-    run safely in the sandbox without additional dependencies.
+    """Generate a self-contained, IO-free aggregation script.
 
     Args:
-        manifest: Output of Stage 1 (data_fetcher).
+        manifest: Output of Stage 1 (data_fetcher). Used to determine which
+            signal types have data; ``manifest.output_dir`` is **no longer
+            referenced** by the generated script.
         template: Parsed signal_template.json.
 
     Returns:
-        A string containing the complete Python script.
+        A string containing the complete Python script. The script reads
+        ``RAW_DATA`` (injected by ``SandboxClient.execute`` via
+        ``extra_constants``), computes per-granularity aggregates, and
+        prints ``__AGG_BEGIN__<json>__AGG_END__`` to stdout.
     """
-    output_dir = manifest.output_dir
     signal_types = template.get("signal_types", [])
 
-    # Build the script piecewise
-    parts: list[str] = []
-    parts.append(_script_header(output_dir))
-    parts.append(_aggregate_functions())
-
+    # Pre-compute the aggregation plan as plain data so the script doesn't
+    # have to know about templates — it's a pure compute kernel driven by
+    # a static plan embedded in the script.
+    plan: list[dict[str, Any]] = []
     for sig_type in signal_types:
         type_id = sig_type["id"]
-        # Find corresponding manifest entry
         entry = next((e for e in manifest.signal_types if e.id == type_id), None)
         if not entry or entry.row_count == 0:
             continue
+        plan.append({
+            "type_id": type_id,
+            "granularities": [
+                {
+                    "granularity": g["granularity"],
+                    "group_by": g.get("group_by", []),
+                    "aggregates": g.get("aggregates", {}),
+                    # Standard types tag rows with _feeds_granularities;
+                    # dependency_scan does not — represented as None.
+                    "feeds_filter": (
+                        g["granularity"]
+                        if sig_type.get("collection_strategy", "standard") != "dependency_scan"
+                        else None
+                    ),
+                }
+                for g in sig_type.get("granularities", [])
+            ],
+        })
 
-        strategy = sig_type.get("collection_strategy", "standard")
-        if strategy == "dependency_scan":
-            parts.append(_dependency_type_block(sig_type, entry, output_dir))
-        else:
-            parts.append(_standard_type_block(sig_type, entry, output_dir))
-
-    parts.append(_script_footer())
-    script = "\n".join(parts)
-    logger.debug("Generated aggregation script: %d lines", script.count("\n"))
-    return script
+    return _SCRIPT_TEMPLATE.format(
+        plan=repr(plan),
+        result_begin=RESULT_BEGIN,
+        result_end=RESULT_END,
+    )
 
 
-def _script_header(output_dir: str) -> str:
-    """Import block and output directory setup."""
-    return f'''"""Auto-generated aggregation script for signal builder Stage 2."""
+# ── Script template ──────────────────────────────────────────────────────────
+# The generated script is self-contained and depends only on the Python
+# stdlib. ``RAW_DATA`` is injected as a module-level constant by
+# ``SandboxClient.execute``.
+
+_SCRIPT_TEMPLATE = '''"""Auto-generated Stage 2 signal aggregation kernel.
+
+Inputs (injected as module-level constants by SandboxClient.execute):
+    RAW_DATA: dict[type_id, list[row]]
+    XCV:      str
+
+Output: single line on stdout framed by {result_begin!r} / {result_end!r}
+        containing JSON: dict[type_id, dict[granularity, list[group_record]]]
+"""
 import json
-import os
+import re
+import sys
 from collections import defaultdict
 
-OUTPUT_DIR = {repr(output_dir)}
-AGGREGATED_DIR = os.path.join(OUTPUT_DIR, "aggregated")
-os.makedirs(AGGREGATED_DIR, exist_ok=True)
 
+PLAN = {plan}
+
+
+# ── Aggregate functions ─────────────────────────────────────────────────────
 
 def _snake_case(name):
-    """Convert PascalCase/camelCase to snake_case."""
-    import re
     s1 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\\1_\\2", name)
     return re.sub(r"([a-z0-9])([A-Z])", r"\\1_\\2", s1).lower()
 
 
 def _get(row, key):
-    """Get value from row with snake_case fallback."""
     val = row.get(key)
     if val is None:
         val = row.get(_snake_case(key))
     return val
 
-'''
 
-
-def _aggregate_functions() -> str:
-    """Built-in aggregate function implementations for the sandbox script."""
-    return '''
 def agg_count_distinct(field, rows):
-    return len({_get(r, field) for r in rows if _get(r, field) is not None})
+    return len({{_get(r, field) for r in rows if _get(r, field) is not None}})
 
 def agg_count(field, rows):
     return len(rows)
@@ -128,10 +156,9 @@ def agg_max(field, rows):
         return max(vals)
 
 def agg_collect_distinct(field, rows):
-    return sorted({str(_get(r, field)) for r in rows if _get(r, field) is not None})
+    return sorted({{str(_get(r, field)) for r in rows if _get(r, field) is not None}})
 
 def agg_pre_aggregated(field, rows):
-    """Read a pre-aggregated value from the first row."""
     if not rows:
         return None
     val = _get(rows[0], field)
@@ -139,7 +166,8 @@ def agg_pre_aggregated(field, rows):
         return int(val)
     return val
 
-AGG_FUNCTIONS = {
+
+AGG_FUNCTIONS = {{
     "count_distinct": agg_count_distinct,
     "count": agg_count,
     "sum": agg_sum,
@@ -148,156 +176,67 @@ AGG_FUNCTIONS = {
     "min": agg_min,
     "max": agg_max,
     "collect_distinct": agg_collect_distinct,
-}
+}}
 
 
 def compute_aggregate(expr, rows):
-    """Parse func(field) and dispatch to aggregate function."""
     if expr.startswith("pre_aggregated:"):
-        field = expr[len("pre_aggregated:"):]
-        return agg_pre_aggregated(field, rows)
-    import re
+        return agg_pre_aggregated(expr[len("pre_aggregated:"):], rows)
     m = re.match(r"^(\\w+)\\((.+)\\)$", expr.strip())
     if not m:
-        raise ValueError(f"Malformed aggregate expression: {expr!r}")
+        raise ValueError("Malformed aggregate expression: " + repr(expr))
     func_name, field = m.group(1), m.group(2)
     fn = AGG_FUNCTIONS.get(func_name)
     if fn is None:
-        raise ValueError(f"Unknown aggregate function: {func_name}")
+        raise ValueError("Unknown aggregate function: " + func_name)
     return fn(field, rows)
 
 
 def group_and_aggregate(rows, group_by, aggregates, feeds_filter=None):
-    """Group rows by keys, compute aggregates, return list of group records."""
-    # Filter by feeds_granularities if specified
-    if feeds_filter:
-        rows = [r for r in rows if feeds_filter in r.get("_feeds_granularities", [])]
-
+    if feeds_filter is not None:
+        rows = [r for r in rows if feeds_filter in (r.get("_feeds_granularities") or [])]
     if not rows:
         return []
-
     if not aggregates:
-        # No aggregation — each row is its own group
         return rows
-
-    # Group rows by composite key
     groups = defaultdict(list)
     for row in rows:
         key = tuple(_get(row, k) for k in group_by)
         groups[key].append(row)
-
-    results = []
+    out = []
     for key_vals, group_rows in groups.items():
-        record = {}
-        # Carry forward group_by values
+        record = {{}}
         for k, v in zip(group_by, key_vals):
             record[k] = v
             record[_snake_case(k)] = v
-
-        # Compute aggregates
         for agg_name, agg_expr in aggregates.items():
             record[agg_name] = compute_aggregate(agg_expr, group_rows)
-
         record["_row_count"] = len(group_rows)
-        results.append(record)
-
-    return results
-
-'''
+        out.append(record)
+    return out
 
 
-def _standard_type_block(
-    sig_type: dict[str, Any],
-    entry: Any,
-    output_dir: str,
-) -> str:
-    """Generate aggregation block for a standard signal type."""
-    type_id = sig_type["id"]
-    file_path = os.path.join(output_dir, entry.file)
-    type_out_dir = os.path.join(output_dir, "aggregated", type_id)
+# ── Drive the plan ──────────────────────────────────────────────────────────
 
-    lines = [
-        f'# ── {type_id}: {sig_type.get("name", "")} ──',
-        f'print("Processing {type_id}...")',
-        f'_type_dir = os.path.join(AGGREGATED_DIR, {repr(type_id)})',
-        f'os.makedirs(_type_dir, exist_ok=True)',
-        f'with open({repr(file_path)}, "r") as f:',
-        f'    _rows_{type_id.replace("-", "_")} = json.load(f)',
-        f'print(f"  Loaded {{len(_rows_{type_id.replace("-", "_")})}} rows")',
-        '',
-    ]
+result = {{}}
+for entry in PLAN:
+    type_id = entry["type_id"]
+    rows = RAW_DATA.get(type_id) or []
+    per_grain = {{}}
+    for g in entry["granularities"]:
+        per_grain[g["granularity"]] = group_and_aggregate(
+            rows,
+            group_by=g["group_by"],
+            aggregates=g["aggregates"],
+            feeds_filter=g["feeds_filter"],
+        )
+    result[type_id] = per_grain
+    print("[agg] {{0}}: {{1}} grains, {{2}} input rows".format(
+        type_id, len(per_grain), len(rows)),
+        file=sys.stderr,
+    )
 
-    var_name = f"_rows_{type_id.replace('-', '_')}"
-
-    for gran_cfg in sig_type.get("granularities", []):
-        gran_name = gran_cfg["granularity"]
-        group_by = gran_cfg.get("group_by", [])
-        aggregates = gran_cfg.get("aggregates", {})
-
-        lines.append(f'# Granularity: {gran_name}')
-        lines.append(f'_groups = group_and_aggregate(')
-        lines.append(f'    {var_name},')
-        lines.append(f'    group_by={json.dumps(group_by)},')
-        lines.append(f'    aggregates={json.dumps(aggregates)},')
-        lines.append(f'    feeds_filter={repr(gran_name)},')
-        lines.append(f')')
-        out_file = os.path.join(type_out_dir, f"{gran_name}.json")
-        lines.append(f'with open(os.path.join(_type_dir, {repr(gran_name + ".json")}), "w") as f:')
-        lines.append(f'    json.dump(_groups, f, default=str)')
-        lines.append(f'print(f"  {gran_name}: {{len(_groups)}} groups")')
-        lines.append('')
-
-    return "\n".join(lines) + "\n"
-
-
-def _dependency_type_block(
-    sig_type: dict[str, Any],
-    entry: Any,
-    output_dir: str,
-) -> str:
-    """Generate aggregation block for the dependency_scan signal type."""
-    type_id = sig_type["id"]
-    dep_dir = os.path.join(output_dir, type_id)
-    type_out_dir = os.path.join(output_dir, "aggregated", type_id)
-
-    lines = [
-        f'# ── {type_id}: {sig_type.get("name", "")} (dependency_scan) ──',
-        f'print("Processing {type_id} (dependency scan)...")',
-        f'_dep_dir = {repr(dep_dir)}',
-        f'_type_dir = os.path.join(AGGREGATED_DIR, {repr(type_id)})',
-        f'os.makedirs(_type_dir, exist_ok=True)',
-        '',
-        '# Load all dependency files and merge rows',
-        f'_all_dep_rows = []',
-        f'for _fname in os.listdir(_dep_dir):',
-        f'    if _fname.startswith("dep_") and _fname.endswith(".json"):',
-        f'        with open(os.path.join(_dep_dir, _fname), "r") as f:',
-        f'            _all_dep_rows.extend(json.load(f))',
-        f'print(f"  Loaded {{len(_all_dep_rows)}} total dependency rows")',
-        '',
-    ]
-
-    for gran_cfg in sig_type.get("granularities", []):
-        gran_name = gran_cfg["granularity"]
-        group_by = gran_cfg.get("group_by", [])
-        aggregates = gran_cfg.get("aggregates", {})
-
-        lines.append(f'# Granularity: {gran_name}')
-        lines.append(f'_groups = group_and_aggregate(')
-        lines.append(f'    _all_dep_rows,')
-        lines.append(f'    group_by={json.dumps(group_by)},')
-        lines.append(f'    aggregates={json.dumps(aggregates)},')
-        lines.append(f')')
-        lines.append(f'with open(os.path.join(_type_dir, {repr(gran_name + ".json")}), "w") as f:')
-        lines.append(f'    json.dump(_groups, f, default=str)')
-        lines.append(f'print(f"  {gran_name}: {{len(_groups)}} groups")')
-        lines.append('')
-
-    return "\n".join(lines) + "\n"
-
-
-def _script_footer() -> str:
-    """Final print statement."""
-    return '''
-print("\\nAggregation complete.")
+# Frame the JSON payload so the host can extract it deterministically
+# even if other prints are interleaved.
+print({result_begin!r} + json.dumps(result, default=str) + {result_end!r})
 '''

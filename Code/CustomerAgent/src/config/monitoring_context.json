@@ -1,22 +1,32 @@
 {
-  "poll_interval_minutes": 10,
+  "poll_interval_minutes": 60,
   "max_concurrent_investigations": 5,
   "default_lookback_hours": 4,
   "targets": [
     {
       "customer_name": "BlackRock, Inc",
+      "enabled": true,
       "service_tree_ids": [
         { 
           "id": "db348eb2-16db-44b3-b867-f60f7cfb87d4", 
           "name": "SQL Connectivity", 
+          "enabled": true,
           "support_product_names": ["Azure SQL DB", "SQL Managed Instance"], 
           "owning_tenant_names": ["SQL Connectivity"] 
         },
         { 
           "id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0", 
           "name": "Azure Kubernetes Service", 
+          "enabled": true,
           "support_product_names": ["Azure Kubernetes Service (AKS)"], 
           "owning_tenant_names": ["Azure Kubernetes Service"] 
+        },
+        {
+          "id": "49c39e84-285c-45e1-9008-ac6b217161e2",
+          "name": "ScaleSet Platform and Solution",
+          "enabled": true,
+          "support_product_names": ["Virtual Machines", "Virtual Machine Running Windows", "Virtual Machine Running Linux"],
+          "owning_tenant_names": ["Virtual Machines"]
         }
       ]
     }

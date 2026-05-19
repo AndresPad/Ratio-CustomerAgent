@@ -636,6 +636,20 @@ def _apply_inner(parsed: ParsedAgentOutput, investigation: "Investigation") -> N
     # ── Symptoms ─────────────────────────────────────────────
     # Triage agent outputs confirmed symptoms with full fields from LLM matching.
     existing_sym_ids = {s.template_id for s in investigation.symptoms}
+
+    # Build template lookup so we can enforce filters that the LLM path bypasses
+    # (e.g. customer_name_equals_target — prevents accepting a single-case symptom
+    # confirmed against another customer's case from a multi-customer signal).
+    try:
+        from ..signals.symptom_matcher import load_symptom_templates
+        _all_templates = {t.get("id"): t for t in load_symptom_templates()}
+    except Exception:
+        _all_templates = {}
+    _target_customer = (
+        (investigation.signal_builder_result.customer_name or "").strip().lower()
+        if investigation.signal_builder_result else ""
+    )
+
     for s in parsed.symptoms:
         tid = s.get("template_id", s.get("id", ""))
         if not tid or tid in existing_sym_ids:
@@ -643,6 +657,22 @@ def _apply_inner(parsed: ParsedAgentOutput, investigation: "Investigation") -> N
         # Only include confirmed symptoms
         if s.get("status", "confirmed") != "confirmed":
             continue
+        # Enforce target-customer match for templates that require it.
+        tmpl = _all_templates.get(tid) or {}
+        tmpl_filters = tmpl.get("filters", {}) or {}
+        if tmpl_filters.get("customer_name_equals_target") is True and _target_customer:
+            enr = s.get("enrichments", {}) or {}
+            emitted = (
+                enr.get("customer_name")
+                or enr.get("Customer_CloudCustomerName")
+                or ""
+            )
+            if str(emitted).strip().lower() != _target_customer:
+                logger.info(
+                    "Rejecting LLM-emitted symptom %s: customer_name=%r does not match target=%r",
+                    tid, emitted, _target_customer,
+                )
+                continue
         cat = s.get("category", "")
         if not cat and "-" in tid:
             cat = tid.split("-")[1].lower()  # SYM-SLI-001 → "sli"

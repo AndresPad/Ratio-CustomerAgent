@@ -1,0 +1,408 @@
+{
+  "_meta": {
+    "description": "Unified hypothesis definitions for all 4 investigation scenarios. Each scenario defines trigger signals, evidence requirements, symptom mappings, and verdict logic.",
+    "version": "2.0.0",
+    "verdicts": ["CONFIRMED", "CONTRIBUTING", "REFUTED", "RISK"],
+    "design_rules": [
+      "A customer SR can NEVER be overridden by absence of telemetry — SR present = always CONFIRMED.",
+      "In reactive scenarios (SR exists), evidence only changes the narrative/scope, not the verdict.",
+      "In proactive scenarios, evidence determines the verdict (CONFIRMED, CONTRIBUTING, or RISK).",
+      "REFUTED is only valid in proactive scenarios where no customer reported anything and no evidence found."
+    ],
+    "sli_categories": ["connectivity", "availability", "capacity", "management"]
+  },
+
+  "symptom_catalog": {
+    "_description": "All symptom IDs referenced by hypotheses, grouped by signal source.",
+    "sli_breach": {
+      "SYM-SLI-001": { "name": "SLI Category Degraded in Region", "weight": 1, "description": "Single region shows SLI category degradation for the customer." },
+      "SYM-SLI-002": { "name": "SLI Category Degraded Across Regions", "weight": 2, "description": "Same SLI category breached in 2+ regions — indicates platform-wide issue." },
+      "SYM-SLI-003": { "name": "Severe SLI Category Degradation Across Regions", "weight": 3, "description": "Cross-region SLI with avg value < 25% — near-total failure." },
+      "SYM-SLI-004": { "name": "Multiple SLI Categories Breached in Region", "weight": 2, "description": "2+ distinct SLIs breached in same region — systemic regional issue." },
+      "SYM-SLI-005": { "name": "Broad Regional SLI Failure", "weight": 3, "description": "4+ distinct SLIs breached in same region — severe regional platform failure." },
+      "SYM-SLI-006": { "name": "Cross-Customer SLI Degradation in Region", "weight": 2, "description": "Other customers show SLI degradation in the same region — platform-level." },
+      "SYM-SLI-007": { "name": "Severe Cross-Customer SLI Degradation", "weight": 3, "description": "Cross-customer degradation with avg < 50% — critical platform stress." }
+    },
+    "support_tickets": {
+      "SYM-SUP-001": { "name": "Customer Filed Support Case", "weight": 2, "description": "At least one support case exists for the customer in the time window — direct signal of customer impact." },
+      "SYM-SUP-002": { "name": "Customer Raised CritSit", "weight": 3, "description": "One or more cases flagged as CritSit — critical business impact." },
+      "SYM-SUP-003": { "name": "Customer Escalated Support Case", "weight": 2, "description": "Case severity increased post-filing — issue worse than initially assessed." },
+      "SYM-SUP-004": { "name": "Multiple Cases Same Product", "weight": 2, "description": "Multiple SRs for the same product — systemic product issue." },
+      "SYM-SUP-005": { "name": "Multiple Customers Filed Support Requests", "weight": 3, "description": "2+ distinct customers filed SRs for the same product — widespread." },
+      "SYM-SUP-006": { "name": "Multiple Customer CritSits", "weight": 4, "description": "Multiple customers raised CritSits — smoking-gun signal of critical platform failure." }
+    },
+    "outage_exposure": {
+      "SYM-OUT-001": { "name": "Incident Detected", "weight": 1, "description": "An IcM incident exists in the time window." },
+      "SYM-OUT-002": { "name": "Confirmed Outage", "weight": 3, "description": "Incident has IsOutage=true — confirmed customer-facing failure." },
+      "SYM-OUT-003": { "name": "Widespread Confirmed Outage with Child Incidents", "weight": 3, "description": "Confirmed outage (IsOutage=true) with 5+ child incidents — multi-team/region impact." },
+      "SYM-OUT-004": { "name": "Customer-Correlated Confirmed Outage", "weight": 3, "description": "Confirmed outage (IsOutage=true) linked to customer's SupportTicketId — direct correlation with verified customer-facing failure." },
+      "SYM-OUT-005": { "name": "Multiple Confirmed Outages Detected", "weight": 3, "description": "Multiple confirmed outages (IsOutage=true) from same tenant — systemic confirmed failure pattern." }
+    },
+    "dependency_degradation": {
+      "SYM-DEP-001": { "name": "Dependency SLI Breach in Customer Region", "weight": 2, "description": "Dependency service SLI breached in a region where the customer has resources." },
+      "SYM-DEP-002": { "name": "Dependency SLI Breached Across Multiple Regions", "weight": 3, "description": "Same dependency SLI breached in 2+ customer regions — widespread dep failure." },
+      "SYM-DEP-003": { "name": "Multiple SLIs Breached for Dependency Service", "weight": 3, "description": "2+ distinct SLIs breached for the same dependency — broad dep degradation." },
+      "SYM-DEP-004": { "name": "Multiple Dependency Services Degraded in Region", "weight": 3, "description": "2+ dependency services degraded in same region — regional platform stress." }
+    }
+  },
+
+  "evidence_catalog": {
+    "_description": "All evidence requirements referenced by hypotheses. Each maps to a data collection tool.",
+    "ER-SLI-001": { "name": "Customer SLI Breach Data", "tool": "collect_impacted_resource_customer_tool", "description": "Per-subscription/region/SLI aggregates for the specific customer." },
+    "ER-SLI-002": { "name": "Multi-Customer SLI Breach Data", "tool": "collect_impacted_resource_multicustomer_tool", "description": "Cross-customer SLI aggregates to detect platform-wide impact." },
+    "ER-TKT-001": { "name": "Customer Support Cases", "tool": "collect_support_request_tool", "description": "Support cases filed by this customer." },
+    "ER-TKT-002": { "name": "Multi-Customer Support Cases", "tool": "collect_support_request_multicustomer_tool", "description": "Cross-customer SR aggregation — detects if others are filing tickets." },
+    "ER-OUT-001": { "name": "IcM Incidents", "tool": "collect_incident_details_tool", "description": "Recent high-severity or confirmed-outage incidents." },
+    "ER-OUT-002": { "name": "Incident Root Cause", "tool": "collect_root_cause_tool", "description": "Root-cause analysis for a specific incident." },
+    "ER-DEP-002": { "name": "Dependency SLI Breach Data", "tool": "collect_impacted_resource_multicustomer_tool", "description": "SLI breach data per dependency service in customer regions." },
+    "ER-REGION-001": { "name": "Customer Resource Regions", "tool": "collect_customer_region_tool", "description": "Distinct regions where the customer has monitored resources." }
+  },
+
+  "sli_category_mapping": {
+    "_description": "Maps SLI category to the type of issue the customer is likely facing.",
+    "connectivity": {
+      "issue_type": "Connection / Network Issues",
+      "customer_impact": "Customer cannot connect to resources, timeout errors, DNS resolution failures, network path issues.",
+      "typical_symptoms": "Connection refused, timeout, SSL/TLS handshake failure, intermittent drops."
+    },
+    "availability": {
+      "issue_type": "Service Availability Issues",
+      "customer_impact": "Resources are unreachable or returning errors, service is down or degraded.",
+      "typical_symptoms": "HTTP 5xx errors, service unavailable, health check failures, failover triggered."
+    },
+    "capacity": {
+      "issue_type": "Resource Capacity Exhaustion",
+      "customer_impact": "Customer workloads are throttled, new resource creation fails, scale-out blocked.",
+      "typical_symptoms": "Throttling errors, AllocationFailed, quota exceeded, performance degradation under load."
+    },
+    "management": {
+      "issue_type": "Control Plane / Management Issues",
+      "customer_impact": "Customer cannot create/update/delete resources, portal operations fail, ARM errors.",
+      "typical_symptoms": "Provisioning failures, management API errors, deployment failures, RBAC/auth issues."
+    }
+  },
+
+  "scenarios": [
+    {
+      "id": "SCENARIO-1",
+      "name": "Customer-Initiated Support Request",
+      "type": "reactive",
+      "description": "Customer has raised one or more support requests (strong) or CritSit (very strong). Impact is always CONFIRMED because the customer reported it. Evidence determines scope (localized vs widespread) and root cause.",
+      "trigger_signals": ["SYM-SUP-001", "SYM-SUP-002"],
+      "verdict_rule": "Always CONFIRMED when trigger signal present. Evidence changes the narrative, not the verdict.",
+      "verdict_matrix": {
+        "_description": "All rows produce CONFIRMED. The columns determine scope and root-cause attribution.",
+        "rows": [
+          { "sli_spike": true,  "other_srs": true,  "incident": true,  "verdict": "CONFIRMED", "scope": "widespread",  "interpretation": "Widespread known issue — SLI confirms telemetry impact, other customers affected, service team aware." },
+          { "sli_spike": true,  "other_srs": true,  "incident": false, "verdict": "CONFIRMED", "scope": "widespread",  "interpretation": "Widespread issue — SLI + other SRs corroborate, service team unaware." },
+          { "sli_spike": true,  "other_srs": false, "incident": true,  "verdict": "CONFIRMED", "scope": "localized",   "interpretation": "Localized known issue — SLI confirms impact, service team has incident, but only this customer reporting." },
+          { "sli_spike": true,  "other_srs": false, "incident": false, "verdict": "CONFIRMED", "scope": "localized",   "interpretation": "Localized customer-specific — SLI confirms impact, no other customers or incidents." },
+          { "sli_spike": false, "other_srs": true,  "incident": true,  "verdict": "CONFIRMED", "scope": "widespread",  "interpretation": "Known issue, possible monitoring gap — other SRs + incident confirm platform issue, no SLI correlation for this customer." },
+          { "sli_spike": false, "other_srs": true,  "incident": false, "verdict": "CONFIRMED", "scope": "widespread",  "interpretation": "Others affected too, monitoring gap — no SLI data but other customers confirm the issue is real." },
+          { "sli_spike": false, "other_srs": false, "incident": true,  "verdict": "CONFIRMED", "scope": "localized",   "interpretation": "Known issue, no SLI correlation — service team has incident but telemetry doesn't capture this failure mode." },
+          { "sli_spike": false, "other_srs": false, "incident": false, "verdict": "CONFIRMED", "scope": "localized",   "interpretation": "Real impact, no correlation — customer-confirmed impact with no telemetry, incidents, or other SRs. Possible monitoring gap or intermittent issue." }
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "HYP-S1-FULL",
+          "name": "Customer SR with Full Corroboration",
+          "statement": "Customer '{customer_name}' raised a support request and all evidence sources confirm impact — SLI degradation detected in '{sli_category}', other customers reporting issues, and service team has an active incident. This is a widespread, known platform issue.",
+          "scope": "widespread",
+          "trigger_symptoms": ["SYM-SUP-001"],
+          "expected_symptoms": [
+            "SYM-SUP-001", "SYM-SUP-002", "SYM-SUP-003", "SYM-SUP-004",
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004",
+            "SYM-SUP-005", "SYM-SUP-006",
+            "SYM-OUT-001", "SYM-OUT-002", "SYM-OUT-003", "SYM-OUT-004"
+          ],
+          "required_symptoms": ["SYM-SUP-001"],
+          "corroborating_symptoms": {
+            "sli_signals": ["SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-003", "SYM-SLI-004", "SYM-SLI-005"],
+            "other_customer_signals": ["SYM-SUP-005", "SYM-SUP-006", "SYM-SLI-006", "SYM-SLI-007"],
+            "incident_signals": ["SYM-OUT-001", "SYM-OUT-002", "SYM-OUT-003", "SYM-OUT-004", "SYM-OUT-005"]
+          },
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-TKT-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "Strongest when SYM-SUP-002 (CritSit) co-occurs with SLI breach symptoms (SYM-SLI-001/002) AND other customer SRs (SYM-SUP-005) AND incident (SYM-OUT-001/002). The SLI category that spikes determines the nature of impact: connectivity → connection failures, availability → service down, capacity → throttling, management → control plane failures. SYM-OUT-004 (customer-correlated incident) is direct linkage. Scope: widespread — multiple evidence sources confirm platform-level issue."
+        },
+        {
+          "id": "HYP-S1-SLI",
+          "name": "Customer SR Corroborated by SLI Degradation",
+          "statement": "Customer '{customer_name}' raised a support request and SLI degradation in '{sli_category}' confirms telemetry-level impact. No other customers or service team incidents detected — issue appears localized to this customer.",
+          "scope": "localized",
+          "trigger_symptoms": ["SYM-SUP-001"],
+          "expected_symptoms": [
+            "SYM-SUP-001", "SYM-SUP-002", "SYM-SUP-003",
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004"
+          ],
+          "required_symptoms": ["SYM-SUP-001", "SYM-SLI-001"],
+          "excluding_symptoms_for_scope_upgrade": {
+            "_note": "If any of these fire, the hypothesis upgrades to HYP-S1-FULL (widespread).",
+            "other_customer_signals": ["SYM-SUP-005", "SYM-SUP-006"],
+            "incident_signals": ["SYM-OUT-001", "SYM-OUT-002"]
+          },
+          "min_symptoms_for_match": 2,
+          "evidence_needed": ["ER-TKT-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "Customer SR + SLI breach = confirmed impact with telemetry evidence. The SLI category identifies the failure domain. If SYM-SLI-002 (cross-region) fires, the issue spans multiple regions. If only SYM-SLI-001 (single region), it's region-specific. Absence of SYM-SUP-005 (other SRs) and SYM-OUT-001 (incidents) means the issue is likely customer-specific — misconfiguration, application bug, quota/throttling, or isolated service problem."
+        },
+        {
+          "id": "HYP-S1-PLATFORM",
+          "name": "Customer SR with Platform Evidence but No SLI Correlation",
+          "statement": "Customer '{customer_name}' raised a support request. No SLI degradation detected for this customer, but other customers are reporting issues and/or the service team has an active incident — this is a known platform issue with a monitoring gap for this customer's telemetry.",
+          "scope": "widespread",
+          "trigger_symptoms": ["SYM-SUP-001"],
+          "expected_symptoms": [
+            "SYM-SUP-001", "SYM-SUP-002",
+            "SYM-SUP-005", "SYM-SUP-006",
+            "SYM-OUT-001", "SYM-OUT-002", "SYM-OUT-003"
+          ],
+          "required_symptoms": ["SYM-SUP-001"],
+          "min_corroboration_needed": {
+            "_note": "At least one of these must fire (other SRs OR incident) to match this hypothesis.",
+            "any_of": ["SYM-SUP-005", "SYM-OUT-001", "SYM-OUT-002"]
+          },
+          "excluding_symptoms": ["SYM-SLI-001"],
+          "min_symptoms_for_match": 2,
+          "evidence_needed": ["ER-TKT-001", "ER-SLI-001", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "Customer SR is real, but no SLI correlation found — this indicates a monitoring gap (the failure mode isn't captured by current SLIs) or an intermittent issue that doesn't sustain long enough to breach SLI thresholds. However, platform evidence (other SRs or incidents) confirms this is NOT a false report. The customer's issue is real and the root cause is platform-level. Action: investigate monitoring coverage for this failure mode."
+        },
+        {
+          "id": "HYP-S1-NOEVIDENCE",
+          "name": "Customer SR with No Corroboration",
+          "statement": "Customer '{customer_name}' raised a support request but no SLI degradation, other customer reports, or service team incidents were found. The customer's reported impact is real but has no telemetry or platform correlation — possible monitoring gap, intermittent issue, or customer-side problem.",
+          "scope": "localized",
+          "trigger_symptoms": ["SYM-SUP-001"],
+          "expected_symptoms": ["SYM-SUP-001", "SYM-SUP-002", "SYM-SUP-003"],
+          "required_symptoms": ["SYM-SUP-001"],
+          "excluding_symptoms": ["SYM-SLI-001", "SYM-SUP-005", "SYM-OUT-001"],
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-TKT-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "The customer reported impact, which is always authoritative. Absence of telemetry does NOT mean no impact — it means the issue is not captured by current SLI monitoring. Possible causes: (1) intermittent failures that don't breach SLI thresholds, (2) failure mode not covered by SLI categories, (3) customer-side configuration or application issue, (4) DNS/network path issue not instrumented. SYM-SUP-002 (CritSit) or SYM-SUP-003 (escalated) increases urgency. Action: investigate monitoring gaps and customer-specific root cause."
+        }
+      ]
+    },
+
+    {
+      "id": "SCENARIO-2",
+      "name": "SLI Spike on Customer Resources",
+      "type": "proactive",
+      "description": "One or more SLIs spike in specific categories (connectivity, availability, capacity, management) for customer resources. Customer has NOT raised an SR yet. Evidence from other sources determines if this is confirmed impact, contributing factor, or early risk.",
+      "trigger_signals": ["SYM-SLI-001", "SYM-SLI-002"],
+      "verdict_rule": "Verdict depends on corroborating evidence: other SRs + incident → CONFIRMED; partial corroboration → CONTRIBUTING; no corroboration → RISK.",
+      "verdict_matrix": {
+        "rows": [
+          { "other_srs": true,  "incident": true,  "verdict": "CONFIRMED",    "interpretation": "Strong corroboration — other customers reporting + service team aware. Customer likely impacted." },
+          { "other_srs": true,  "incident": false, "verdict": "CONTRIBUTING",  "interpretation": "Other customers affected but service team unaware. Potential undetected issue." },
+          { "other_srs": false, "incident": true,  "verdict": "CONTRIBUTING",  "interpretation": "Known issue exists but only this customer's SLIs show spike. May be early cascade." },
+          { "other_srs": false, "incident": false, "verdict": "RISK",          "interpretation": "Anomaly detected with no corroboration. Monitor — could be transient spike or early warning." }
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "HYP-S2-CONFIRMED",
+          "name": "SLI Spike with Full Corroboration",
+          "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources. Other customers have filed support requests and the service team has an active incident — confirming a platform-level issue impacting this customer.",
+          "trigger_symptoms": ["SYM-SLI-001"],
+          "expected_symptoms": [
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-003", "SYM-SLI-004",
+            "SYM-SUP-005", "SYM-SUP-006",
+            "SYM-SLI-006", "SYM-SLI-007",
+            "SYM-OUT-001", "SYM-OUT-002", "SYM-OUT-003"
+          ],
+          "required_symptoms": ["SYM-SLI-001", "SYM-SUP-005", "SYM-OUT-001"],
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 3,
+          "evidence_needed": ["ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "Strongest proactive signal — SLI degradation corroborated by both other customer SRs and service team incidents. SYM-SLI-002 (cross-region) or SYM-SLI-006/007 (cross-customer) elevate severity. SYM-OUT-002 (confirmed outage) is the strongest incident signal. The SLI category identifies the impact domain. This customer has NOT raised an SR but is confirmed impacted — proactive outreach recommended."
+        },
+        {
+          "id": "HYP-S2-CONTRIBUTING",
+          "name": "SLI Spike with Partial Corroboration",
+          "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources. Partial corroboration found — either other customers have reported issues OR the service team has an incident, but not both.",
+          "trigger_symptoms": ["SYM-SLI-001"],
+          "expected_symptoms": [
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004",
+            "SYM-SUP-005",
+            "SYM-OUT-001", "SYM-OUT-002"
+          ],
+          "required_symptoms": ["SYM-SLI-001"],
+          "min_corroboration_needed": {
+            "_note": "At least one corroborating signal must fire, but NOT both (both = CONFIRMED).",
+            "any_of": ["SYM-SUP-005", "SYM-OUT-001"]
+          },
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 2,
+          "evidence_needed": ["ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "SLI spike plus one corroborating source. If SYM-SUP-005 fires (other SRs) but no incident — the service team hasn't detected the issue yet; this customer's SLI anomaly adds evidence of an emerging problem. If SYM-OUT-001 fires (incident) but no other SRs — there's a known issue and this customer's SLIs indicate they may be affected. Monitor for escalation."
+        },
+        {
+          "id": "HYP-S2-RISK",
+          "name": "SLI Spike with No Corroboration",
+          "statement": "SLI category '{sli_category}' shows degradation for customer '{customer_name}' resources, but no other customers have reported issues and the service team has no active incidents. This is an isolated anomaly — may be a transient spike, customer-specific workload change, or early warning of an emerging issue.",
+          "trigger_symptoms": ["SYM-SLI-001"],
+          "expected_symptoms": [
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004"
+          ],
+          "required_symptoms": ["SYM-SLI-001"],
+          "excluding_symptoms": ["SYM-SUP-001", "SYM-SUP-005", "SYM-OUT-001"],
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-OUT-001"],
+          "supporting_signals": "SLI anomaly with no external corroboration. If SYM-SLI-002 (cross-region) fires, the risk is elevated — the issue spans regions but nobody has reported it yet. If only SYM-SLI-001 (single region), more likely a transient spike or customer workload change. Check ER-SLI-002 (multi-customer view): if other customers' SLIs are stable, this is likely customer-specific; if others also show degradation but haven't reported, this is an early warning of an undetected platform issue."
+        }
+      ]
+    },
+
+    {
+      "id": "SCENARIO-3",
+      "name": "Service Team Incident or Outage",
+      "type": "proactive",
+      "description": "Service team has created an IcM incident (weak signal) or declared an outage (strong signal). Customer has NOT raised an SR. We investigate whether this customer is actually impacted by this incident.",
+      "trigger_signals": ["SYM-OUT-001", "SYM-OUT-002"],
+      "verdict_rule": "Verdict depends on customer SLI impact and other customer SRs: SLI spike + other SRs → CONFIRMED; partial evidence → CONTRIBUTING; no evidence → RISK.",
+      "verdict_matrix": {
+        "rows": [
+          { "sli_spike": true,  "other_srs": true,  "verdict": "CONFIRMED",    "interpretation": "Customer impacted — SLI degradation + other customers reporting. Customer hasn't reported yet." },
+          { "sli_spike": true,  "other_srs": false, "verdict": "CONTRIBUTING",  "interpretation": "Customer SLIs degraded but no other reports. Incident may be affecting this customer." },
+          { "sli_spike": false, "other_srs": true,  "verdict": "CONTRIBUTING",  "interpretation": "Others affected but this customer's SLIs are stable. May be next or has different exposure." },
+          { "sli_spike": false, "other_srs": false, "verdict": "RISK",          "interpretation": "Incident exists but no evidence of customer impact yet. Monitor." }
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "HYP-S3-CONFIRMED",
+          "name": "Incident/Outage Confirmed Impacting Customer",
+          "statement": "Service team incident '{incident_id}' (Severity {severity}) by '{owning_tenant_name}' is confirmed impacting customer '{customer_name}' — SLI degradation detected in '{sli_category}' and other customers have reported issues. The customer has not raised an SR yet.",
+          "trigger_symptoms": ["SYM-OUT-001"],
+          "expected_symptoms": [
+            "SYM-OUT-001", "SYM-OUT-002", "SYM-OUT-003", "SYM-OUT-005",
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004",
+            "SYM-SUP-005", "SYM-SUP-006"
+          ],
+          "required_symptoms": ["SYM-OUT-001", "SYM-SLI-001", "SYM-SUP-005"],
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 3,
+          "evidence_needed": ["ER-OUT-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-TKT-001"],
+          "supporting_signals": "Strongest proactive signal from incident path — incident + customer SLI degradation + other SRs. SYM-OUT-002 (confirmed outage) is the strongest trigger. SYM-OUT-003 (child incidents) or SYM-OUT-005 (multiple incidents) indicate widespread blast radius. The SLI category identifies how the customer is affected. SYM-SUP-006 (multi-customer CritSits) escalates severity further. Action: proactive customer notification recommended."
+        },
+        {
+          "id": "HYP-S3-CONTRIBUTING",
+          "name": "Incident/Outage Possibly Affecting Customer",
+          "statement": "Service team incident '{incident_id}' by '{owning_tenant_name}' may be affecting customer '{customer_name}'. Partial evidence found — either the customer's SLIs show degradation OR other customers have reported issues, but not both.",
+          "trigger_symptoms": ["SYM-OUT-001"],
+          "expected_symptoms": [
+            "SYM-OUT-001", "SYM-OUT-002",
+            "SYM-SLI-001", "SYM-SLI-002",
+            "SYM-SUP-005"
+          ],
+          "required_symptoms": ["SYM-OUT-001"],
+          "min_corroboration_needed": {
+            "_note": "At least one of SLI spike or other SRs, but NOT both (both = CONFIRMED).",
+            "any_of": ["SYM-SLI-001", "SYM-SUP-005"]
+          },
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 2,
+          "evidence_needed": ["ER-OUT-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002", "ER-TKT-001"],
+          "supporting_signals": "Incident exists with partial corroboration. If SYM-SLI-001 fires (customer SLI degraded) but no other SRs — the incident may be causing isolated customer impact. If SYM-SUP-005 fires (other SRs) but no SLI spike for this customer — the incident is affecting others and this customer may be next or may have different exposure to the failure. Monitor for escalation."
+        },
+        {
+          "id": "HYP-S3-RISK",
+          "name": "Incident/Outage Detected — No Customer Impact Evidence",
+          "statement": "Service team incident '{incident_id}' by '{owning_tenant_name}' exists but no evidence of customer '{customer_name}' impact found — no SLI degradation, no other customer SRs, and the customer hasn't reported issues.",
+          "trigger_symptoms": ["SYM-OUT-001"],
+          "expected_symptoms": ["SYM-OUT-001", "SYM-OUT-002"],
+          "required_symptoms": ["SYM-OUT-001"],
+          "excluding_symptoms": ["SYM-SUP-001", "SYM-SLI-001", "SYM-SUP-005"],
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-OUT-001", "ER-SLI-001", "ER-TKT-002", "ER-TKT-001"],
+          "supporting_signals": "Incident detected but no customer impact evidence. This could mean: (1) the incident affects a different region/service than this customer uses, (2) the incident is being mitigated before customer impact, (3) early stage — customer impact may emerge later. SYM-OUT-002 (confirmed outage) increases risk even without current customer impact. Monitor the customer's SLIs for emerging degradation."
+        },
+        {
+          "id": "HYP-S3-REFUTED",
+          "name": "Incident Not Impacting Customer",
+          "statement": "Service team incident '{incident_id}' by '{owning_tenant_name}' has no measurable impact on customer '{customer_name}'. The incident exists but is either resolved, mitigated, or affects different regions/services than the customer uses.",
+          "trigger_symptoms": ["SYM-OUT-001"],
+          "expected_symptoms": ["SYM-OUT-001"],
+          "required_symptoms": ["SYM-OUT-001"],
+          "excluding_symptoms": ["SYM-OUT-002", "SYM-SLI-001", "SYM-SUP-001", "SYM-SUP-005"],
+          "refutation_conditions": {
+            "_note": "Refuted only when: incident exists but is NOT confirmed outage, AND no customer SLI impact, AND no SRs from anyone.",
+            "all_absent": ["SYM-OUT-002", "SYM-SLI-001", "SYM-SUP-001", "SYM-SUP-005"]
+          },
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-OUT-001", "ER-SLI-001", "ER-TKT-001"],
+          "supporting_signals": "This is a negative conclusion. The incident exists (SYM-OUT-001) but is NOT a confirmed outage (no SYM-OUT-002), the customer's SLIs are clean (no SYM-SLI-001), no one has filed SRs (no SYM-SUP-001/005), and no child incidents (no SYM-OUT-003). The incident is either resolved, mitigated, or scoped to a region/service the customer doesn't use."
+        }
+      ]
+    },
+
+    {
+      "id": "SCENARIO-4",
+      "name": "Dependency Service Degradation",
+      "type": "proactive",
+      "description": "A dependency service shows SLI spikes in certain categories in the same region as customer resources. We investigate whether this dependency degradation is cascading into the primary service the customer uses.",
+      "trigger_signals": ["SYM-DEP-001", "SYM-DEP-002"],
+      "verdict_rule": "Verdict depends on primary service SLI impact and other customer SRs: primary SLI spike + other SRs → CONFIRMED; partial evidence → CONTRIBUTING; no evidence → RISK.",
+      "verdict_matrix": {
+        "rows": [
+          { "primary_sli_spike": true,  "other_srs": true,  "verdict": "CONFIRMED",    "interpretation": "Dependency degradation is cascading — primary service SLIs degraded + others reporting issues." },
+          { "primary_sli_spike": true,  "other_srs": false, "verdict": "CONTRIBUTING",  "interpretation": "Cascade confirmed via SLI but no customer reports yet. Dependency is degrading primary service." },
+          { "primary_sli_spike": false, "other_srs": true,  "verdict": "CONTRIBUTING",  "interpretation": "Others reporting issues. Dependency may be affecting primary service through paths not covered by SLIs." },
+          { "primary_sli_spike": false, "other_srs": false, "verdict": "RISK",          "interpretation": "Dependency degraded but no evidence of cascade to primary service yet. Monitor." }
+        ]
+      },
+      "hypotheses": [
+        {
+          "id": "HYP-S4-CONFIRMED",
+          "name": "Dependency Degradation Cascading to Customer",
+          "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions, and the primary service SLIs for customer '{customer_name}' are also degraded. Other customers have reported issues — confirming the dependency cascade is causing customer impact.",
+          "trigger_symptoms": ["SYM-DEP-001"],
+          "expected_symptoms": [
+            "SYM-DEP-001", "SYM-DEP-002", "SYM-DEP-003", "SYM-DEP-004",
+            "SYM-SLI-001", "SYM-SLI-002", "SYM-SLI-004",
+            "SYM-SUP-005"
+          ],
+          "required_symptoms": ["SYM-DEP-001", "SYM-SLI-001", "SYM-SUP-005"],
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 3,
+          "evidence_needed": ["ER-DEP-002", "ER-REGION-001", "ER-SLI-001", "ER-SLI-002", "ER-TKT-002"],
+          "supporting_signals": "Full dependency cascade confirmed — dependency SLI breach (SYM-DEP-001/002) cascading into primary service SLI breach (SYM-SLI-001/002) with customer validation (SYM-SUP-005). SYM-DEP-002 (cross-region) or SYM-DEP-003 (multi-SLI) indicate broad dependency failure. SYM-DEP-004 (multiple deps degraded) is the strongest signal — regional infrastructure failure. The primary SLI category identifies how the cascade manifests for the customer."
+        },
+        {
+          "id": "HYP-S4-CONTRIBUTING",
+          "name": "Dependency Degradation with Partial Cascade Evidence",
+          "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions. Partial cascade evidence found for customer '{customer_name}' — either the primary service SLIs show degradation OR other customers have reported issues, but not both.",
+          "trigger_symptoms": ["SYM-DEP-001"],
+          "expected_symptoms": [
+            "SYM-DEP-001", "SYM-DEP-002", "SYM-DEP-003",
+            "SYM-SLI-001",
+            "SYM-SUP-005"
+          ],
+          "required_symptoms": ["SYM-DEP-001"],
+          "min_corroboration_needed": {
+            "_note": "At least one of primary SLI spike or other SRs, but NOT both (both = CONFIRMED).",
+            "any_of": ["SYM-SLI-001", "SYM-SUP-005"]
+          },
+          "excluding_symptoms": ["SYM-SUP-001"],
+          "min_symptoms_for_match": 2,
+          "evidence_needed": ["ER-DEP-002", "ER-REGION-001", "ER-SLI-001", "ER-TKT-002"],
+          "supporting_signals": "Dependency degradation with partial cascade. If SYM-SLI-001 fires (primary SLI degraded) but no other SRs — the cascade is happening but customer hasn't reported and others may not be affected. If SYM-SUP-005 fires but no primary SLI spike — the dependency issue is affecting other customers through a path not visible in this customer's SLIs. SYM-DEP-002 (cross-region) increases confidence the dependency issue is broad. Monitor for escalation."
+        },
+        {
+          "id": "HYP-S4-RISK",
+          "name": "Dependency Degradation — No Cascade Evidence",
+          "statement": "Dependency service '{dependency_service_name}' shows SLI degradation in customer regions for customer '{customer_name}', but the primary service SLIs are stable and no customers have reported issues. The dependency is degraded but cascade to primary service not yet observed.",
+          "trigger_symptoms": ["SYM-DEP-001"],
+          "expected_symptoms": [
+            "SYM-DEP-001", "SYM-DEP-002", "SYM-DEP-003", "SYM-DEP-004"
+          ],
+          "required_symptoms": ["SYM-DEP-001"],
+          "excluding_symptoms": ["SYM-SLI-001", "SYM-SUP-001", "SYM-SUP-005"],
+          "min_symptoms_for_match": 1,
+          "evidence_needed": ["ER-DEP-002", "ER-REGION-001", "ER-SLI-001", "ER-TKT-002"],
+          "supporting_signals": "Dependency degradation detected but no cascade evidence yet. This is an early warning — the dependency service is failing but the primary service may have resilience (retries, circuit breakers, caching) absorbing the impact temporarily. SYM-DEP-002 (cross-region) elevates risk — if the dependency fails across multiple regions, the cascade is more likely. SYM-DEP-004 (multiple deps degraded) is critical risk — regional infrastructure stress that will likely cascade. Monitor primary service SLIs closely for emerging degradation."
+        }
+      ]
+    }
+  ]
+}

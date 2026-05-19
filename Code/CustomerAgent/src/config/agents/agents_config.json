@@ -155,7 +155,7 @@
     },
     {
       "name": "data_fetcher",
-      "description": "Fetches raw data from MCP collection tools and deposits full datasets into sandbox /mnt/data/ for downstream analysis. Does NOT summarize or interpret data.",
+      "description": "Fetches raw data from MCP collection tools and deposits full datasets into ADLS at {ADLS_BASE_PATH}/{xcv}/evidence/ for downstream analysis. Does NOT summarize or interpret data.",
       "prompt_file": "investigation_data_fetcher_prompt.txt",
       "model": "gpt-4o",
       "temperature": 0.3,
@@ -268,7 +268,7 @@
     "max_evidence_cycles": 2,
     "intermediate_outputs": true,
     "termination_signal": "investigation_resolved",
-    "narrator_enabled": true,
+    "narrator_enabled": false,
     "agent_timeout_seconds": {
       "triage_agent": 120,
       "action_planner": 120,

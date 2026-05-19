@@ -22,13 +22,51 @@
       "blocked_prefixes": ["drop", "delete", "update", "insert", "alter", "truncate"]
     },
     {
+      "name": "run_kql_query_tool",
+      "type": "kusto_query",
+      "log_input": true,
+      "log_output": true,
+      "description": "Execute a read-only KQL query against an allow-listed Azure Data Explorer (Kusto) cluster.\n\nThe target cluster is selected via `cluster_alias` from the configured allow-list:\n    - bdsair  : BDSAIR cluster (incident root-cause data) [DEFAULT]\n    - sli     : SLI cluster (impacted resources, customer regions)\n    - icm     : IcM cluster (incident details)\n    - support : Support cluster (support cases)\n\nDestructive control commands (.drop / .delete / .set / .alter / .append / .ingest / .update / .create / .rename / .move / .purge) are blocked.\n\nParameters:\n    query (str): The KQL query to execute.\n    max_rows (int, optional): Maximum number of rows to return. Defaults to 200.\n    cluster_alias (str, optional): Which cluster to target. One of: bdsair, sli, icm, support. Defaults to 'bdsair'.\n\nReturns:\n    JSON string with shape {\"rows\": [...], \"count\": <int>, \"total_count\": <int>} or an error payload {\"error\": \"message\"}",
+      "clusters": {
+        "bdsair":  { "cluster_env": "BDSAIR_KUSTO_CLUSTER",  "database_env": "BDSAIR_KUSTO_DATABASE",  "cert_client_id_env": "AUTH_CLIENT_ID" },
+        "sli":     { "cluster_env": "SLI_KUSTO_CLUSTER",     "database_env": "SLI_KUSTO_DATABASE",     "cert_client_id_env": "AUTH_CLIENT_ID" },
+        "icm":     { "cluster_env": "ICM_KUSTO_CLUSTER",     "database_env": "ICM_KUSTO_DATABASE",     "cert_client_id_env": "AUTH_CLIENT_ID" },
+        "support": { "cluster_env": "SUPPORT_KUSTO_CLUSTER", "database_env": "SUPPORT_KUSTO_DATABASE", "cert_client_id_env": "SUPPORT_AUTH_CLIENT_ID" }
+      },
+      "default_cluster": "bdsair",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "The KQL query to execute."
+        },
+        "max_rows": {
+          "type": "integer",
+          "required": false,
+          "default": 200,
+          "description": "Maximum number of rows to return. Defaults to 200."
+        },
+        "cluster_alias": {
+          "type": "string",
+          "required": false,
+          "default": "bdsair",
+          "enum": ["bdsair", "sli", "icm", "support"],
+          "description": "Which cluster to target. One of: bdsair, sli, icm, support."
+        }
+      },
+      "blocked_prefixes": [".drop", ".delete", ".set", ".alter", ".append", ".ingest", ".update", ".create", ".rename", ".move", ".purge"]
+    },
+    {
       "name": "run_synapse_tsql_query_tool",
       "type": "tsql",
       "log_input": true,
       "log_output": true,
-      "description": "Execute a read-only T-SQL query against the Synapse SQL (serverless) endpoint in workspace syn-ratio-airod-prod.\n\nParameters:\n    query (str): The SELECT statement to execute. Destructive statements (DROP/DELETE/UPDATE/INSERT/ALTER/TRUNCATE) are blocked.\n    max_rows (int, optional): Maximum number of rows to return. Defaults to 100. Use None to return all rows.\n\nReturns:\n    JSON string with shape {\"rows\": [...], \"count\": <int>} or an error payload {\"error\": \"message\"}",
-      "endpoint_env": "SYNAPSE_SQL_ENDPOINT",
-      "database_env": "SYNAPSE_SQL_DATABASE",
+      "description": "Execute a read-only T-SQL query against an allow-listed Synapse SQL (serverless) endpoint.\n\nThe target endpoint is selected via `endpoint_alias` from the configured allow-list:\n    - airod        : AIROD Synapse workspace [DEFAULT]\n    - icmanalytics : IcM Analytics Synapse workspace\n\nDestructive statements (DROP/DELETE/UPDATE/INSERT/ALTER/TRUNCATE) are blocked.\n\nParameters:\n    query (str): The SELECT statement to execute.\n    max_rows (int, optional): Maximum number of rows to return. Defaults to 100. Use None to return all rows.\n    endpoint_alias (str, optional): Which Synapse endpoint to target. One of: airod, icmanalytics. Defaults to 'airod'.\n\nReturns:\n    JSON string with shape {\"rows\": [...], \"count\": <int>} or an error payload {\"error\": \"message\"}",
+      "endpoints": {
+        "airod":        { "endpoint_env": "AIROD_SYNAPSE_SQL_ENDPOINT",        "database_env": "AIROD_SYNAPSE_SQL_DATABASE",        "app_id_env": "AIROD_SYNAPSE_APP_ID" },
+        "icmanalytics": { "endpoint_env": "ICMANALYTICS_SYNAPSE_SQL_ENDPOINT", "database_env": "ICMANALYTICS_SYNAPSE_SQL_DATABASE", "app_id_env": "ICMANALYTICS_SYNAPSE_APP_ID" }
+      },
+      "default_endpoint": "airod",
       "parameters": {
         "query": {
           "type": "string",
@@ -40,6 +78,13 @@
           "required": false,
           "default": 100,
           "description": "Maximum number of rows to return. Defaults to 100."
+        },
+        "endpoint_alias": {
+          "type": "string",
+          "required": false,
+          "default": "airod",
+          "enum": ["airod", "icmanalytics"],
+          "description": "Which Synapse endpoint to target. One of: airod, icmanalytics."
         }
       },
       "blocked_prefixes": ["drop", "delete", "update", "insert", "alter", "truncate"]
@@ -435,6 +480,61 @@
         },
         "supportProductNames": {
           "source": "support_product_names"
+        }
+      },
+      "validation": {
+        "time_range": {
+          "start_param": "start_time",
+          "end_param": "end_time",
+          "max_days": 30,
+          "max_age_days": 30
+        }
+      }
+    },
+    {
+      "name": "collect_vm_impact_tool",
+      "type": "kusto",
+      "log_input": true,
+      "log_output": true,
+      "description": "Collect unplanned Virtual Machine impact events for a customer's subscriptions, reshaped to SIG-TYPE-1 (SLI) schema.\n\nVM-only: queries VMALENS_Support (vmainsight cluster) joined with customer subscriptions from icmanalytics. Only RCAEngineCategory == 'Unplanned'.\nOutput matches SLI schema: CustomerName, SubscriptionId, Region, SLO_SliId, SliCategory, Symptoms, ImpactedResources, TotalImpactDurationMin, etc.\n\nParameters:\n    service_tree_id (str): Service tree node ID (accepted for interface consistency).\n    customer_name (str): Customer name to resolve subscriptions.\n    start_time (str): ISO8601 UTC start timestamp.\n    end_time (str): ISO8601 UTC end timestamp.\n\nReturns:\n    JSON string: {\"rows\": [...], \"count\": n} or {\"error\": \"message\"}.",
+      "cluster_env": "ICM_KUSTO_CLUSTER",
+      "database_env": "ICM_KUSTO_DATABASE",
+      "cert_client_id_env": "AUTH_CLIENT_ID",
+      "query_file": "vm_impact.kql",
+      "parameters": {
+        "service_tree_id": {
+          "type": "string",
+          "required": true,
+          "description": "Identifier of the service tree node."
+        },
+        "customer_name": {
+          "type": "string",
+          "required": true,
+          "description": "Customer name to resolve subscriptions (matched against MSCustomerName)."
+        },
+        "start_time": {
+          "type": "string",
+          "required": true,
+          "description": "ISO8601 UTC start timestamp (e.g. '2026-04-22T08:00:00Z')."
+        },
+        "end_time": {
+          "type": "string",
+          "required": true,
+          "description": "ISO8601 UTC end timestamp (e.g. '2026-04-22T12:00:00Z')."
+        }
+      },
+      "kusto_params": {
+        "serviceTreeId": {
+          "source": "service_tree_id"
+        },
+        "customerName": {
+          "source": "customer_name"
+        },
+        "startTime": {
+          "source": "start_time"
+        },
+        "endTime": {
+          "source": "end_time"
         }
       },
       "validation": {

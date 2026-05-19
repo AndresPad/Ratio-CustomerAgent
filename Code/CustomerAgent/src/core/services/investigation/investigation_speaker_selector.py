@@ -159,11 +159,15 @@ def _get_evidence_file_paths(collected_er_ids: list[str]) -> list[str]:
     """Derive sandbox file paths for already-collected ERs from fetch_tools_config.
 
     Maps ER-IDs → fetch tool → output files using the er_patterns in config.
-    Returns paths with the real xcv value substituted.
+    Returns ADLS paths (under ADLS_BASE_PATH) with the real xcv value substituted.
     """
     import fnmatch
     import json as _json
+    import os as _os
     from pathlib import Path
+
+    def _adls_base() -> str:
+        return _os.getenv("ADLS_BASE_PATH", "runs").strip("/")
 
     xcv = get_current_xcv() or "unknown"
 
@@ -190,7 +194,7 @@ def _get_evidence_file_paths(collected_er_ids: list[str]) -> list[str]:
             for call_spec in tool_config.get("mcp_calls", []):
                 output_file = call_spec.get("output_file", "")
                 if output_file:
-                    paths.append(f"/mnt/data/{xcv}/{evidence_subdir}/{output_file}")
+                    paths.append(f"{_adls_base()}/{xcv}/{evidence_subdir}/{output_file}")
 
     return sorted(set(paths))
 

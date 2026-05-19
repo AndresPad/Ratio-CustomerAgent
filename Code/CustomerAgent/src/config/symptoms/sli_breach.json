@@ -6,10 +6,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "region_slicategory",
       "weight": 1,
-      "template": "SLI category '{sli_category}' degraded in region '{region}' for customer '{customer_name}': {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {impacted_resources} resources impacted. Avg value: {avg_value}%, Min value: {min_value}%. Duration: {total_duration_min} min. Severity: {severity_tier}.",
+      "template": "SLI category '{sli_category}' degraded in region '{region}' for customer '{customer_name}': {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {impacted_resources} resources impacted. Avg value: {avg_value}%, Min value: {min_value}%. Duration: {total_duration_min} min. Severity: {severity_tier}. Observed symptoms: {symptoms}.",
       "extracted_when": "A single region shows SLI category degradation for the customer. Only emitted when the same category is NOT also degraded across multiple regions (in which case the cross-region symptom takes over).",
       "fields": {
-        "from_data": ["customer_name", "region", "sli_category", "distinct_sli_count", "sli_category_list", "impacted_subscriptions", "impacted_resources", "total_duration_min", "avg_value", "min_value", "severity_tier"]
+        "from_data": ["customer_name", "region", "sli_category", "distinct_sli_count", "sli_category_list", "impacted_subscriptions", "impacted_resources", "total_duration_min", "avg_value", "min_value", "severity_tier", "symptoms"]
       },
       "filters": {
         "min_impacted_resources": 1
@@ -25,10 +25,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "cross_region",
       "weight": 2,
-      "template": "SLI category '{sli_category}' degraded across {distinct_regions} regions for customer '{customer_name}': {region_list}. {distinct_sli_count} SLIs affected ({sli_category_list}), {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources impacted. Avg value: {avg_value}%. This cross-region pattern indicates a widespread platform issue rather than a region-specific problem.",
+      "template": "SLI category '{sli_category}' degraded across {distinct_regions} regions for customer '{customer_name}': {region_list}. {distinct_sli_count} SLIs affected ({sli_category_list}), {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources impacted. Avg value: {avg_value}%. This cross-region pattern indicates a widespread platform issue rather than a region-specific problem. Observed symptoms: {symptoms}.",
       "extracted_when": "The same SLI category (e.g. Availability, Latency) is breached in 2+ distinct regions for the customer, ruling out region-specific causes and suggesting a global platform or service-level issue.",
       "fields": {
-        "from_data": ["customer_name", "sli_category", "distinct_regions", "distinct_sli_count", "sli_category_list", "region_list", "total_impacted_subscriptions", "total_impacted_resources", "avg_value"]
+        "from_data": ["customer_name", "sli_category", "distinct_regions", "distinct_sli_count", "sli_category_list", "region_list", "total_impacted_subscriptions", "total_impacted_resources", "avg_value", "symptoms"]
       },
       "filters": {
         "min_distinct_regions": 2
@@ -40,10 +40,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "cross_region",
       "weight": 3,
-      "template": "SLI category '{sli_category}' shows severe degradation across {distinct_regions} regions for customer '{customer_name}': {region_list}. Avg value: {avg_value}% (near-zero indicates total failure). {distinct_sli_count} SLIs affected ({sli_category_list}), {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources. Severity: CRITICAL.",
+      "template": "SLI category '{sli_category}' shows severe degradation across {distinct_regions} regions for customer '{customer_name}': {region_list}. Avg value: {avg_value}% (near-zero indicates total failure). {distinct_sli_count} SLIs affected ({sli_category_list}), {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources. Severity: CRITICAL. Observed symptoms: {symptoms}.",
       "extracted_when": "A cross-region SLI category signal fires with avg_value below 25%, indicating severe or total service failure across multiple regions.",
       "fields": {
-        "from_data": ["customer_name", "sli_category", "distinct_regions", "distinct_sli_count", "sli_category_list", "region_list", "total_impacted_subscriptions", "total_impacted_resources", "avg_value"]
+        "from_data": ["customer_name", "sli_category", "distinct_regions", "distinct_sli_count", "sli_category_list", "region_list", "total_impacted_subscriptions", "total_impacted_resources", "avg_value", "symptoms"]
       },
       "filters": {
         "min_distinct_regions": 2,
@@ -56,10 +56,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "multi_sli_region",
       "weight": 2,
-      "template": "Region '{region}' has {distinct_sli_count} distinct SLIs breached across multiple categories for customer '{customer_name}': {sli_category_list}. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Multiple SLI categories failing in the same region points to regional infrastructure stress or a shared dependency failure.",
+      "template": "Region '{region}' has {distinct_sli_count} distinct SLIs breached across multiple categories for customer '{customer_name}': {sli_category_list}. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Multiple SLI categories failing in the same region points to regional infrastructure stress or a shared dependency failure. Observed symptoms: {symptoms}.",
       "extracted_when": "2+ distinct SLIs (potentially spanning different categories like Availability and Latency) are breached in the same region for the customer, indicating a broader systemic issue rather than a single-SLI anomaly.",
       "fields": {
-        "from_data": ["customer_name", "region", "distinct_sli_count", "sli_category_list", "total_impacted_subscriptions", "total_impacted_resources"]
+        "from_data": ["customer_name", "region", "distinct_sli_count", "sli_category_list", "total_impacted_subscriptions", "total_impacted_resources", "symptoms"]
       },
       "filters": {
         "min_distinct_sli_count": 2
@@ -71,10 +71,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "multi_sli_region",
       "weight": 3,
-      "template": "Region '{region}' has {distinct_sli_count} distinct SLIs breached for customer '{customer_name}': {sli_category_list}. {total_impacted_subscriptions} subscriptions and {total_impacted_resources} resources affected. High SLI count (4+) in a single region indicates a severe regional platform failure — likely infrastructure-level or shared-dependency cascade.",
+      "template": "Region '{region}' has {distinct_sli_count} distinct SLIs breached for customer '{customer_name}': {sli_category_list}. {total_impacted_subscriptions} subscriptions and {total_impacted_resources} resources affected. High SLI count (4+) in a single region indicates a severe regional platform failure — likely infrastructure-level or shared-dependency cascade. Observed symptoms: {symptoms}.",
       "extracted_when": "4+ distinct SLIs are breached in the same region, indicating a broad regional failure beyond isolated service issues.",
       "fields": {
-        "from_data": ["customer_name", "region", "distinct_sli_count", "sli_category_list", "total_impacted_subscriptions", "total_impacted_resources"]
+        "from_data": ["customer_name", "region", "distinct_sli_count", "sli_category_list", "total_impacted_subscriptions", "total_impacted_resources", "symptoms"]
       },
       "filters": {
         "min_distinct_sli_count": 4
@@ -86,10 +86,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "cross_customer_region",
       "weight": 2,
-      "template": "SLI category '{sli_category}' degraded across {distinct_customers} customers in region '{region}': {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {total_impacted_resources} resources. Avg value: {avg_value}%. Cross-customer degradation in the same region confirms a platform-level issue — not customer-specific.",
+      "template": "SLI category '{sli_category}' degraded across {distinct_customers} customers in region '{region}': {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {total_impacted_resources} resources. Avg value: {avg_value}%. Cross-customer degradation in the same region confirms a platform-level issue — not customer-specific. Observed symptoms: {symptoms}.",
       "extracted_when": "Other customers show SLI degradation in the same region — the multicustomer SLI query shows the same SLI category breached across 3+ subscriptions (belonging to different customers), confirming a platform-level issue.",
       "fields": {
-        "from_data": ["region", "sli_category", "distinct_sli_count", "distinct_customers", "sli_category_list", "impacted_subscriptions", "total_impacted_resources", "avg_value"]
+        "from_data": ["region", "sli_category", "distinct_sli_count", "distinct_customers", "sli_category_list", "impacted_subscriptions", "total_impacted_resources", "avg_value", "symptoms"]
       },
       "filters": {
         "min_impacted_subscriptions": 3
@@ -101,10 +101,10 @@
       "signal_sources": ["SIG-TYPE-1"],
       "granularity": "cross_customer_region",
       "weight": 3,
-      "template": "SLI category '{sli_category}' severely degraded across {distinct_customers} customers in region '{region}': avg value {avg_value}%. {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {total_impacted_resources} resources. This severe cross-customer pattern indicates critical platform stress requiring immediate investigation.",
+      "template": "SLI category '{sli_category}' severely degraded across {distinct_customers} customers in region '{region}': avg value {avg_value}%. {distinct_sli_count} SLIs ({sli_category_list}), {impacted_subscriptions} subscriptions, {total_impacted_resources} resources. This severe cross-customer pattern indicates critical platform stress requiring immediate investigation. Observed symptoms: {symptoms}.",
       "extracted_when": "Cross-customer degradation with avg value below 50% or 5+ distinct customers affected — indicates critical platform stress beyond isolated regional issues.",
       "fields": {
-        "from_data": ["region", "sli_category", "distinct_sli_count", "distinct_customers", "sli_category_list", "impacted_subscriptions", "total_impacted_resources", "avg_value"]
+        "from_data": ["region", "sli_category", "distinct_sli_count", "distinct_customers", "sli_category_list", "impacted_subscriptions", "total_impacted_resources", "avg_value", "symptoms"]
       },
       "filters": {
         "min_distinct_customers": 2,

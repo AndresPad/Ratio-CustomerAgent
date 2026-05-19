@@ -1,7 +1,8 @@
 """Stage 1: Data Fetcher — calls MCP collection tools and persists raw JSON.
 
 Extracts the fetch + normalise logic from signal_builder.py into a standalone
-stage that writes raw rows to the sandbox filesystem for subsequent aggregation.
+stage that writes raw rows to ADLS Gen2 (via the SandboxClient) for subsequent
+aggregation. /mnt/data is no longer used.
 """
 from __future__ import annotations
 
@@ -11,10 +12,13 @@ import logging
 import os
 import time
 from collections import defaultdict
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from core.models.signals.data_fetch_manifest import DataFetchManifest, ManifestEntry
 from helper.agent_logger import AgentLogger, get_current_xcv
+
+if TYPE_CHECKING:
+    from core.sandbox.client import SandboxClient
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +27,23 @@ async def fetch_and_persist(
     template: dict[str, Any],
     context: dict[str, Any],
     output_dir: str,
+    client: "SandboxClient | None" = None,
 ) -> DataFetchManifest:
-    """Fetch all signal type data via MCP tools and write raw JSON to output_dir.
+    """Fetch all signal type data via MCP tools and write raw JSON to ADLS.
 
     Args:
         template: Parsed signal_template.json.
         context: Evaluation context (customer_name, service_tree_id, etc.).
-        output_dir: Directory to write raw JSON files (e.g. /mnt/data/{xcv}/signals/).
+        output_dir: ADLS prefix for raw JSON files
+            (e.g. ``{ADLS_BASE_PATH}/{xcv}/signals``).
+        client: SandboxClient used for ADLS uploads. Required.
 
     Returns:
         DataFetchManifest describing all written files.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    if client is None:
+        from core.sandbox.client import SandboxClient
+        client = SandboxClient()
 
     manifest = DataFetchManifest(
         xcv=get_current_xcv() or "",
@@ -52,8 +61,8 @@ async def fetch_and_persist(
     async def _fetch_one(sig_type: dict[str, Any]) -> ManifestEntry:
         strategy = sig_type.get("collection_strategy", "standard")
         if strategy == "dependency_scan":
-            return await _fetch_dependency_type(sig_type, context, output_dir, manifest)
-        return await _fetch_standard_type(sig_type, context, output_dir)
+            return await _fetch_dependency_type(sig_type, context, output_dir, manifest, client)
+        return await _fetch_standard_type(sig_type, context, output_dir, client)
 
     results = await asyncio.gather(
         *(_fetch_one(st) for st in signal_types),
@@ -70,13 +79,12 @@ async def fetch_and_persist(
         else:
             manifest.signal_types.append(result)
 
-    # Write manifest
-    manifest_path = os.path.join(output_dir, "manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        f.write(manifest.model_dump_json(indent=2))
+    # Write manifest to ADLS
+    manifest_path = f"{output_dir.rstrip('/')}/manifest.json"
+    await client.upload_file(manifest_path, manifest.model_dump_json(indent=2))
 
     logger.info(
-        "Data fetch complete: %d signal types, output_dir=%s",
+        "Data fetch complete: %d signal types, output_dir=adls:%s",
         len(manifest.signal_types), output_dir,
     )
     return manifest
@@ -86,8 +94,9 @@ async def _fetch_standard_type(
     sig_type: dict[str, Any],
     context: dict[str, Any],
     output_dir: str,
+    client: "SandboxClient",
 ) -> ManifestEntry:
-    """Fetch a standard signal type's data and write to {type_id}.json."""
+    """Fetch a standard signal type's data and write to {type_id}.json in ADLS."""
     from core.services.signals.signal_builder import _call_collection_tool, _normalise_row
 
     type_id = sig_type["id"]
@@ -127,11 +136,10 @@ async def _fetch_standard_type(
         all_rows.extend(normalised)
         feeds_map[tool_cfg["tool_name"]] = feed_grans
 
-    # Write raw rows
+    # Write raw rows to ADLS
     file_name = f"{type_id}.json"
-    file_path = os.path.join(output_dir, file_name)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(all_rows, f, default=str)
+    file_path = f"{output_dir.rstrip('/')}/{file_name}"
+    await client.upload_file(file_path, json.dumps(all_rows, default=str, indent=2))
 
     elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
     logger.info("Fetched %s: %d rows in %.1fms", type_id, len(all_rows), elapsed_ms)
@@ -150,6 +158,7 @@ async def _fetch_dependency_type(
     context: dict[str, Any],
     output_dir: str,
     manifest: DataFetchManifest,
+    client: "SandboxClient",
 ) -> ManifestEntry:
     """Fetch dependency_scan signal type data.
 
@@ -157,7 +166,7 @@ async def _fetch_dependency_type(
     1. Call region tool to discover customer regions
     2. Load dependency mappings for this primary service
     3. For each dependency, call multicustomer tool
-    4. Filter to customer regions, enrich, write per-dep JSON files
+    4. Filter to customer regions, enrich, write per-dep JSON files to ADLS
     """
     from core.services.signals.signal_builder import (
         _call_collection_tool, _normalise_row, _load_json, _CONFIG_DIR,
@@ -192,11 +201,12 @@ async def _fetch_dependency_type(
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
         return ManifestEntry(id=type_id, file="", row_count=0, collection_duration_ms=elapsed_ms)
 
-    # Write regions file
-    dep_dir = os.path.join(output_dir, type_id)
-    os.makedirs(dep_dir, exist_ok=True)
-    with open(os.path.join(dep_dir, "regions.json"), "w", encoding="utf-8") as f:
-        json.dump(sorted(customer_regions), f)
+    # Write regions file to ADLS
+    dep_dir = f"{output_dir.rstrip('/')}/{type_id}"
+    await client.upload_file(
+        f"{dep_dir}/regions.json",
+        json.dumps(sorted(customer_regions), indent=2),
+    )
 
     # Step 2: Load dependency mappings
     dep_mappings = _load_json("dependency_services/dependency_mappings.json")
@@ -256,9 +266,12 @@ async def _fetch_dependency_type(
         dep_name, dep_category, rows = result
 
         filtered: list[dict[str, Any]] = []
+        regions_seen: set[str] = set()
         for row in rows:
             norm = _normalise_row(row)
             row_region = (norm.get("region", norm.get("Region", "")) or "").lower()
+            if row_region:
+                regions_seen.add(row_region)
             if row_region in customer_regions:
                 norm["DependencyServiceName"] = dep_name
                 norm["dependency_service_name"] = dep_name
@@ -266,13 +279,27 @@ async def _fetch_dependency_type(
                 norm["dependency_category"] = dep_category
                 filtered.append(norm)
 
-        if filtered:
+        if rows and not filtered:
+            logger.warning(
+                "SIG-TYPE-4 [%s]: %d raw rows returned but 0 matched customer regions "
+                "(regions_seen=%s, customer_regions=%s) — writing empty file for traceability",
+                dep_name, len(rows), sorted(regions_seen), sorted(customer_regions),
+            )
+
+        # Write a file whenever the dependency tool actually returned rows
+        # (even if 0 matched customer regions) so the manifest reflects every
+        # dependency we successfully checked. Skip deps that returned 0 rows
+        # (e.g. <TBD> service_tree_id or empty MCP response).
+        if rows:
             safe_name = dep_name.replace(" ", "_").replace("/", "_").lower()
             dep_file_name = f"dep_{safe_name}.json"
-            with open(os.path.join(dep_dir, dep_file_name), "w", encoding="utf-8") as f:
-                json.dump(filtered, f, default=str)
-            dep_names.append(dep_name)
-            total_rows += len(filtered)
+            await client.upload_file(
+                f"{dep_dir}/{dep_file_name}",
+                json.dumps(filtered, default=str, indent=2),
+            )
+            if filtered:
+                dep_names.append(dep_name)
+                total_rows += len(filtered)
 
     manifest.dependency_services = dep_names
 

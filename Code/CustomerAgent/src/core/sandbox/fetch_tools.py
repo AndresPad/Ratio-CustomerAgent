@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -82,26 +85,76 @@ async def _call_mcp_tool(tool_name: str, params: dict[str, Any]) -> dict[str, An
 
 
 async def _write_to_sandbox(filepath: str, data: dict[str, Any]) -> int:
-    """Write JSON data to sandbox at the given path. Creates parent dirs. Returns row count."""
+    """Write JSON data to ADLS at the given path. Returns row count.
+
+    ``filepath`` is an ADLS path under the configured filesystem (e.g.
+    ``runs/<xcv>/evidence/foo.json``). /mnt/data is no longer used.
+    """
     client = _get_sandbox_client()
-    json_str = json.dumps(data, default=str)
+    json_str = json.dumps(data, default=str, indent=2)
 
-    code = (
-        "import json, os\n"
-        "from pathlib import Path\n"
-        f"data = json.loads({repr(json_str)})\n"
-        f"Path('{filepath}').parent.mkdir(parents=True, exist_ok=True)\n"
-        f"Path('{filepath}').write_text(json.dumps(data, indent=2))\n"
-        f"print(f'Written {{len(data.get(\"rows\", []))}} rows to {filepath}')\n"
-    )
-
-    safe_name = filepath.replace("/", "_").replace(".", "_")
-    result = await client.execute(code=code, filename=f"write_{safe_name}.py")
-    if not result.success:
-        logger.error("Failed to write %s to sandbox: %s", filepath, result.stderr)
-        raise RuntimeError(f"Sandbox write failed for {filepath}: {result.stderr}")
+    try:
+        await client.upload_file(filepath, json_str)
+    except Exception as exc:
+        logger.error("Failed to write %s to ADLS: %s", filepath, exc)
+        raise RuntimeError(f"ADLS write failed for {filepath}: {exc}") from exc
 
     return len(data.get("rows", []))
+
+
+async def _upsert_evidence_manifest(
+    xcv: str,
+    tool_name: str,
+    new_entries: list[dict[str, Any]],
+) -> str | None:
+    """Read–merge–write the investigation evidence manifest in ADLS.
+
+    Path: ``{ADLS_BASE_PATH}/{xcv}/_manifest.json`` (consumed by sandbox_coder
+    via the ``read_sandbox_manifest`` tool).
+
+    Entries are merged by ``path`` so multiple fetch_* tool invocations
+    accumulate into a single manifest per investigation. Returns the manifest
+    path on success, or ``None`` if persistence is disabled / fails.
+    """
+    if not xcv or xcv == "unknown":
+        return None
+    base = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
+    manifest_path = f"{base}/{xcv}/_manifest.json"
+    client = _get_sandbox_client()
+
+    try:
+        try:
+            existing_text = await client.read_file(manifest_path)
+            manifest = json.loads(existing_text) if existing_text else {}
+        except Exception:
+            manifest = {}
+
+        files: list[dict[str, Any]] = list(manifest.get("files", []))
+        by_path = {f.get("path"): i for i, f in enumerate(files) if f.get("path")}
+
+        for entry in new_entries:
+            stamped = dict(entry)
+            stamped["fetch_tool"] = tool_name
+            stamped["written_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            p = stamped.get("path")
+            if p in by_path:
+                files[by_path[p]] = stamped
+            else:
+                by_path[p] = len(files)
+                files.append(stamped)
+
+        manifest["xcv"] = xcv
+        manifest["files"] = files
+        manifest["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        manifest.setdefault("source", "data_fetcher")
+
+        await client.upload_file(
+            manifest_path, json.dumps(manifest, default=str, indent=2)
+        )
+        return manifest_path
+    except Exception:
+        logger.exception("Failed to upsert evidence manifest at adls:%s", manifest_path)
+        return None
 
 
 def _extract_schema(rows: list[dict]) -> list[str]:
@@ -109,6 +162,120 @@ def _extract_schema(rows: list[dict]) -> list[str]:
     if rows:
         return list(rows[0].keys())
     return []
+
+
+# ─── Service-name path scoping ────────────────────────────────────────────────
+# To prevent multiple fetch calls from overwriting the same evidence file when
+# they target different services (primary vs each dependency), the engine can
+# scope the output path by the service's friendly name (slugified). The mapping
+# from service_tree_id → name is resolved from dependency_mappings.json plus
+# the per-dependency files in config/dependency_services/.
+
+_DEPENDENCY_SERVICES_DIR = (
+    Path(__file__).resolve().parents[2] / "config" / "dependency_services"
+)
+
+
+def _slugify_service_name(name: str) -> str:
+    """Lower-case, strip special chars, replace whitespace/dashes with '_'."""
+    if not name:
+        return ""
+    s = name.lower().strip()
+    s = re.sub(r"[^a-z0-9_\s-]", "", s)
+    s = re.sub(r"[\s\-]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
+
+
+@lru_cache(maxsize=1)
+def _load_dependency_mappings() -> dict[str, Any]:
+    fp = _DEPENDENCY_SERVICES_DIR / "dependency_mappings.json"
+    if not fp.is_file():
+        return {}
+    try:
+        return json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("Failed to load dependency_mappings.json")
+        return {}
+
+
+@lru_cache(maxsize=1)
+def _load_dependency_service_files() -> dict[str, dict[str, Any]]:
+    """Return { service_tree_id: dep_service_dict } for every file in the dir."""
+    out: dict[str, dict[str, Any]] = {}
+    if not _DEPENDENCY_SERVICES_DIR.is_dir():
+        return out
+    for fp in _DEPENDENCY_SERVICES_DIR.glob("*.json"):
+        if fp.name == "dependency_mappings.json":
+            continue
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Failed to load dependency service file %s", fp)
+            continue
+        stid = data.get("service_tree_id", "")
+        if stid and not stid.startswith("<"):
+            out[stid] = data
+    return out
+
+
+def _resolve_service_name(service_tree_id: str) -> str | None:
+    """Look up a friendly service name for a service_tree_id.
+
+    Searches the primary mappings first, then the per-dependency files.
+    """
+    if not service_tree_id:
+        return None
+    mappings = _load_dependency_mappings().get("mappings", {})
+    if service_tree_id in mappings:
+        name = mappings[service_tree_id].get("name")
+        if name:
+            return name
+    dep = _load_dependency_service_files().get(service_tree_id)
+    if dep:
+        return dep.get("name")
+    return None
+
+
+def _resolve_dependency_services(primary_service_tree_id: str) -> list[dict[str, Any]]:
+    """Return the list of dependency service dicts for a given primary stid."""
+    mappings = _load_dependency_mappings().get("mappings", {})
+    entry = mappings.get(primary_service_tree_id)
+    if not entry:
+        return []
+    dep_keys = entry.get("dependencies", [])
+    out: list[dict[str, Any]] = []
+    for key in dep_keys:
+        fp = _DEPENDENCY_SERVICES_DIR / f"{key}.json"
+        if not fp.is_file():
+            logger.warning("Dependency service file not found: %s", fp)
+            continue
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Failed to load dependency service file %s", fp)
+            continue
+        stid = data.get("service_tree_id", "")
+        if not stid or stid.startswith("<"):
+            logger.info("Skipping dependency '%s' — no concrete service_tree_id", key)
+            continue
+        out.append(data)
+    return out
+
+
+def _compute_path_scope(call_spec: dict[str, Any], mcp_params: dict[str, Any]) -> str:
+    """Return a slugified sub-folder for an mcp_call, or '' if no scope."""
+    scope = call_spec.get("path_scope")
+    if not scope:
+        return ""
+    raw = mcp_params.get(scope, "")
+    if not raw:
+        return ""
+    if scope == "service_tree_id":
+        name = _resolve_service_name(raw) or raw
+    else:
+        name = str(raw)
+    return _slugify_service_name(name)
 
 
 # ─── Call deduplication cache ─────────────────────────────────────────────────
@@ -151,55 +318,99 @@ async def _execute_fetch_plan(tool_name: str, caller_params: dict[str, Any]) -> 
     config = _get_config()
     tool_config = config["fetch_tools"][tool_name]
     mcp_calls = tool_config["mcp_calls"]
+    iterate_deps = bool(tool_config.get("iterate_dependencies", False))
     evidence_subdir = config.get("subdirs", {}).get("evidence", "evidence")
+    adls_base = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
 
     t0 = time.monotonic()
-    manifest_entries = []
+    manifest_entries: list[dict[str, Any]] = []
 
-    for call_spec in mcp_calls:
-        mcp_tool_name = call_spec["tool"]
-        output_file = call_spec["output_file"]
-        filepath = f"/mnt/data/{xcv}/{evidence_subdir}/{output_file}"
-        param_names = call_spec["params"]
+    # Build the list of "iteration contexts" — each is a (label, params_override)
+    # pair. For non-dependency tools there's a single context with no overrides.
+    iteration_contexts: list[tuple[str, dict[str, Any]]]
+    if iterate_deps:
+        primary_stid = caller_params.get("service_tree_id", "")
+        deps = _resolve_dependency_services(primary_stid)
+        if not deps:
+            logger.warning(
+                "[%s] iterate_dependencies=true but no dependencies resolved for primary service_tree_id=%s",
+                tool_name, primary_stid,
+            )
+        iteration_contexts = [
+            (
+                dep.get("name", dep.get("service_tree_id", "unknown")),
+                {"service_tree_id": dep["service_tree_id"]},
+            )
+            for dep in deps
+        ]
+    else:
+        iteration_contexts = [("__primary__", {})]
 
-        # Build params dict — "?" suffix means optional (skip if empty/falsy)
-        mcp_params: dict[str, Any] = {}
-        for p in param_names:
-            optional = p.endswith("?")
-            key = p.rstrip("?")
-            value = caller_params.get(key, "")
-            if optional and not value:
-                continue
-            mcp_params[key] = value
+    for iter_label, param_override in iteration_contexts:
+        iter_caller_params = {**caller_params, **param_override}
+        for call_spec in mcp_calls:
+            mcp_tool_name = call_spec["tool"]
+            output_file = call_spec["output_file"]
+            param_names = call_spec["params"]
+            er_id = call_spec.get("er_id")  # canonical ER ID from registry
 
-        logger.info("[%s] Calling %s", tool_name, mcp_tool_name)
-        result = await _call_mcp_tool(mcp_tool_name, mcp_params)
+            # Build params dict — "?" suffix means optional (skip if empty/falsy)
+            mcp_params: dict[str, Any] = {}
+            for p in param_names:
+                optional = p.endswith("?")
+                key = p.rstrip("?")
+                value = iter_caller_params.get(key, "")
+                if optional and not value:
+                    continue
+                mcp_params[key] = value
 
-        if "error" not in result:
-            rows_written = await _write_to_sandbox(filepath, result)
-            schema = _extract_schema(result.get("rows", []))
-            manifest_entries.append({
-                "path": filepath,
-                "tool": mcp_tool_name,
-                "rows": rows_written,
-                "schema": schema,
-            })
-        else:
-            manifest_entries.append({
-                "path": filepath,
-                "tool": mcp_tool_name,
-                "rows": 0,
-                "error": result["error"],
-            })
+            # Compute path: optionally scoped by a slugified service name so
+            # primary vs each dependency write to distinct files.
+            scope_sub = _compute_path_scope(call_spec, mcp_params)
+            if scope_sub:
+                filepath = f"{adls_base}/{xcv}/{evidence_subdir}/{scope_sub}/{output_file}"
+            else:
+                filepath = f"{adls_base}/{xcv}/{evidence_subdir}/{output_file}"
+
+            logger.info("[%s] Calling %s (iter=%s, scope=%s)",
+                        tool_name, mcp_tool_name, iter_label, scope_sub or "-")
+            result = await _call_mcp_tool(mcp_tool_name, mcp_params)
+
+            if "error" not in result:
+                rows_written = await _write_to_sandbox(filepath, result)
+                schema = _extract_schema(result.get("rows", []))
+                entry = {
+                    "path": filepath,
+                    "tool": mcp_tool_name,
+                    "rows": rows_written,
+                    "schema": schema,
+                }
+            else:
+                entry = {
+                    "path": filepath,
+                    "tool": mcp_tool_name,
+                    "rows": 0,
+                    "error": result["error"],
+                }
+            if er_id:
+                entry["er_id"] = er_id
+            if scope_sub:
+                entry["service_scope"] = scope_sub
+            manifest_entries.append(entry)
 
     elapsed = round((time.monotonic() - t0) * 1000, 1)
     logger.info("[%s] Completed in %.1fms", tool_name, elapsed)
+
+    # Persist (upsert) the cumulative evidence manifest in ADLS so
+    # sandbox_coder's read_sandbox_manifest tool can find it.
+    manifest_adls_path = await _upsert_evidence_manifest(xcv, tool_name, manifest_entries)
 
     if xcv:
         AgentLogger.get_instance()._emit("data_fetch_complete", xcv, {
             "tool": tool_name,
             "datasets": manifest_entries,
             "duration_ms": elapsed,
+            "manifest_path": manifest_adls_path or "",
         })
 
     result_json = json.dumps({"datasets": manifest_entries, "duration_ms": elapsed})
@@ -228,6 +439,31 @@ async def fetch_sli_data(
         JSON manifest with file paths, row counts, and schemas.
     """
     return await _execute_fetch_plan("fetch_sli_data", locals())
+
+
+@tool(name="fetch_dependency_sli_data")
+async def fetch_dependency_sli_data(
+    service_tree_id: str,
+    start_time: str,
+    end_time: str,
+) -> str:
+    """Fetch SLI breach data for every dependency of a primary service.
+
+    Reads ``dependency_mappings.json`` to find the dependencies of the given
+    primary ``service_tree_id``, then calls ``collect_impacted_resource_multicustomer_tool``
+    once per dependency. Each dependency's result is written to its own folder
+    under ``evidence/{slugified_dep_service_name}/sli_multicustomer.json`` so
+    results never overwrite each other.
+
+    Args:
+        service_tree_id: The PRIMARY service tree ID (used to look up deps).
+        start_time: ISO8601 start time for the query window.
+        end_time: ISO8601 end time for the query window.
+
+    Returns:
+        JSON manifest listing one file per dependency with row counts and schemas.
+    """
+    return await _execute_fetch_plan("fetch_dependency_sli_data", locals())
 
 
 @tool(name="fetch_incident_data")
@@ -271,4 +507,4 @@ async def fetch_support_data(
 
 
 # Export list for agent registration
-ALL_FETCH_TOOLS = [fetch_sli_data, fetch_incident_data, fetch_support_data]
+ALL_FETCH_TOOLS = [fetch_sli_data, fetch_dependency_sli_data, fetch_incident_data, fetch_support_data]

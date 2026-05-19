@@ -2,8 +2,10 @@
 
 Usage:
     python run_signal_builder.py [--customer "BlackRock, Inc"] [--service-tree-id "49c39e84-..."]
+                                 [--start-time "2024-01-15T10:00:00Z"] [--end-time "2024-01-15T14:00:00Z"]
 
 If no arguments are given, uses targets from config/monitoring_context.json.
+If --start-time / --end-time are omitted, defaults to now-4h / now.
 """
 from __future__ import annotations
 
@@ -29,8 +31,8 @@ logging.basicConfig(
 logger = logging.getLogger("run_signal_builder")
 
 
-async def main(customer: str | None, service_tree_id: str | None) -> None:
-    from core.services.signals.signal_builder import evaluate_signals, load_monitoring_context
+async def main(customer: str | None, service_tree_id: str | None, start_time: str | None = None, end_time: str | None = None, sandbox: bool = False) -> None:
+    from core.services.signals.signal_builder import evaluate_signals, evaluate_signals_sandboxed, load_monitoring_context
     from core.services.investigation.investigation_runner import run_investigation
 
     # Build a custom monitoring_context if CLI args provided
@@ -42,7 +44,17 @@ async def main(customer: str | None, service_tree_id: str | None) -> None:
         monitoring_context = {"targets": [target]}
         logger.info("Using CLI target: %s", target)
 
-    results = await evaluate_signals(monitoring_context=monitoring_context)
+    # Inject explicit time window into monitoring_context
+    if start_time or end_time:
+        if monitoring_context is None:
+            monitoring_context = load_monitoring_context()
+        if start_time:
+            monitoring_context["start_time"] = start_time
+        if end_time:
+            monitoring_context["end_time"] = end_time
+        logger.info("Time window: %s → %s", monitoring_context.get("start_time", "default"), monitoring_context.get("end_time", "default"))
+
+    results = await (evaluate_signals_sandboxed if sandbox else evaluate_signals)(monitoring_context=monitoring_context)
 
     if not results:
         logger.info("No signal results returned.")
@@ -108,6 +120,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run signal builder + investigation pipeline")
     parser.add_argument("--customer", type=str, default=None, help="Customer name override")
     parser.add_argument("--service-tree-id", type=str, default=None, help="Service tree ID override")
+    parser.add_argument("--start-time", type=str, default=None, help="Investigation start time (ISO8601 UTC, e.g. 2024-01-15T10:00:00Z)")
+    parser.add_argument("--end-time", type=str, default=None, help="Investigation end time (ISO8601 UTC, e.g. 2024-01-15T14:00:00Z)")
+    parser.add_argument("--sandbox", action="store_true", default=False, help="Use sandboxed 3-stage evaluation pipeline")
     args = parser.parse_args()
 
-    asyncio.run(main(args.customer, args.service_tree_id))
+    asyncio.run(main(args.customer, args.service_tree_id, args.start_time, args.end_time, sandbox=args.sandbox))

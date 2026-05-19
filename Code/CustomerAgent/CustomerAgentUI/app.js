@@ -163,19 +163,20 @@ function _bindSSEEvents() {
             return;
         }
 
-        // Learning-only events (no main pipeline representation)
+        // Learning-only events go exclusively to the learning view
         if (event.type?.startsWith('learning_') || event.type?.startsWith('agent_reward') || event.type?.startsWith('reinvestigation_')) {
             addLearningEvent(event);
             return;
         }
 
-        // Investigation events go to both learning view AND main pipeline
+        // investigation_* events are dual-routed: learning view gets a copy,
+        // but they also flow through to the main pipeline (panels, stats, views).
         if (event.type?.startsWith('investigation_')) {
             addLearningEvent(event);
+            // fall through — do NOT return
         }
-
         // Store main pipeline events for replay on filter change
-        _allEvents.push(event);
+        _allEvents.push(event); 
 
         _eventCount++;
         updateStat('events', _eventCount);

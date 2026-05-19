@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "description": "Master action catalog for the Interpreter's action_composer. The composer maps each composed action to exactly one entry here. Update via PR — this file is the source of truth.",
+  "actions": [
+    {
+      "action_id": "INC-PRIMARY-SVC",
+      "display_name": "Create Incident for Primary Service Team",
+      "action_type": "incident",
+      "grain": "per_service",
+      "tier": "auto",
+      "description": "Create one IcM incident per primary service that shows confirmed impact. Recipient is the owning team for the customer's primary service. Emit one action per distinct primary service across the correlation window. Excludes hypotheses where the service team is already engaged via an existing incident (HYP-OUT-*) or where corroborating evidence is itself an open incident (HYP-SUP-001/003/004).",
+      "applies_when": {
+        "scope_in": ["__primary__"],
+        "min_confidence": 0.5,
+        "verdict_in": ["confirmed", "resolved_as_contributing"],
+        "applicable_hypotheses": [
+          "HYP-SLI-001", "HYP-SLI-002", "HYP-SLI-003",
+          "HYP-SUP-002"
+        ],
+        "applicable_categories": ["sli"]
+      },
+      "evidence_required": ["xcv", "hypothesis_id", "er_id", "service_name", "impacted_subscriptions"],
+      "impact_fields": {
+        "regions": "list[str]",
+        "subscription_count": "int",
+        "resource_count": "int",
+        "impacted_subscriptions": "list[str] — REQUIRED. Customer SubscriptionId values from evidence (deduplicated).",
+        "impacted_resources": "list[{resource_id, resource_type, region}] (optional — populate when evidence carries ResourceId values; emit [] otherwise)",
+        "incidents": "list[{incident_id, severity, is_outage, status, title, owning_tenant, impact_start}] — projected from ER-OUT-001 (incidents.json). Empty list if no incident evidence.",
+        "customer_support_tickets": "list[{case_number, is_crit_sit, region}] — projected from ER-TKT-001 (support_customer.json). Per-ticket detail for THIS customer; one row per CaseNumber.",
+        "sli_multicustomer_summary": "object|null {subscription_count, resource_count, customer_count, regions} — projected from ER-SLI-002 (sli_multicustomer.json) for OTHER customers. Aggregated counts only — never per-row detail. Null if no multi-customer SLI evidence."
+      },
+      "payload_template": {
+        "title": "RATIO: {service_name} impact for {customer_name}",
+        "severity": "{investigation_severity}",
+        "owning_team": "{primary_service_team}",
+        "body": "Customer: {customer_name}\nService: {service_name}\nRegions impacted: {regions}\nSubscriptions impacted: {subscription_count}\nResources impacted: {resource_count}\n\nConfirmed hypotheses:\n{hypothesis_summary}\n\nEvidence references:\n{structured_evidence}\n\n{correlation_context}"
+      }
+    },
+    {
+      "action_id": "EMAIL-AED-IMPACT",
+      "display_name": "Email AED Team — Confirmed Impact (Per Service)",
+      "action_type": "email",
+      "grain": "per_service",
+      "tier": "auto",
+      "description": "Send a per-service email to the AED team summarising confirmed impact for ONE service in this correlation window. Emit one EMAIL-AED-IMPACT action per (service, scope) lane that has confirmed/likely impact for THIS customer — each email's impact, incidents, support tickets, and multicustomer summaries reflect ONLY that service, never aggregated across services.",
+      "applies_when": {
+        "scope_in": ["__primary__", "<dependency_slug>"],
+        "min_confidence": 0.5,
+        "verdict_in": ["confirmed", "resolved_as_contributing"],
+        "applicable_hypotheses": [
+          "HYP-OUT-001", "HYP-OUT-002",
+          "HYP-SLI-001", "HYP-SLI-002",
+          "HYP-SUP-001", "HYP-SUP-002", "HYP-SUP-003",
+          "HYP-DEP-001", "HYP-DEP-002"
+        ],
+        "applicable_categories": ["sli", "outage", "support", "dependency"]
+      },
+      "evidence_required": ["xcv", "hypothesis_id", "service_name", "impacted_subscriptions"],
+      "impact_fields": {
+        "regions": "list[str] — customer-impacted regions for THIS service only.",
+        "subscription_count": "int — count of impacted subscriptions for THIS service.",
+        "resource_count": "int — count of impacted resources for THIS service.",
+        "impacted_subscriptions": "list[str] — customer SubscriptionId values for THIS service (deduplicated).",
+        "impacted_resources": "list[str] — ResourceId values for THIS service (empty if evidence carries none).",
+        "incidents": "list[{incident_id, severity, is_outage, status, title, owning_tenant, impact_start}] — projected from ER-OUT-001. ONLY emitted on the __primary__ scope action; empty list otherwise.",
+        "customer_support_tickets": "list[{case_number, is_crit_sit, region}] — projected from ER-TKT-001. ONLY emitted on the __primary__ scope action; empty list otherwise.",
+        "sli_multicustomer_summary": "object|null {subscription_count, resource_count, customer_count, regions} — projected from ER-SLI-002 for OTHER customers. ONLY emitted on the __primary__ scope action; null otherwise."
+      },
+      "payload_template": {
+        "to": "{aed_team_distribution_list}",
+        "subject": "[RATIO] Confirmed impact for {customer_name} — {service_name}",
+        "body": "Customer {customer_name} is experiencing confirmed impact on {service_name} between {window_start} and {window_end}.\n\nRegions: {regions}\nSubscriptions impacted: {subscription_count}\nResources impacted: {resource_count}\n\nCorrelation ID: {correlation_id}"
+      }
+    },
+    {
+      "action_id": "EMAIL-AED-RISK",
+      "display_name": "Email AED Team — Potential Risk (Dependency Same-Region Overlap)",
+      "action_type": "email",
+      "grain": "per_correlation",
+      "tier": "auto",
+      "description": "Send a single email warning the AED team of POTENTIAL impact. Fires when a dependency service shows confirmed impact in a region that overlaps with the customer's primary-service resource regions, but the primary service is NOT yet confirmed impacted. One email per correlation_id listing every at-risk region/dependency pair.",
+      "applies_when": {
+        "scope_in": ["<dependency_slug>"],
+        "min_confidence": 0.5,
+        "verdict_in": ["confirmed", "resolved_as_contributing"],
+        "applicable_hypotheses": [
+          "HYP-DEP-002", "HYP-DEP-003"
+        ],
+        "applicable_categories": ["dependency"],
+        "extra_conditions": [
+          "There exists at least one region R such that R appears in dependency evidence regions AND R appears in primary-service resource regions",
+          "Primary service does NOT have a confirmed/likely verdict at confidence >= 0.6 for that region (otherwise EMAIL-AED-IMPACT supersedes)"
+        ]
+      },
+      "evidence_required": ["xcv", "hypothesis_id", "dependency_service_name", "overlapping_regions", "impacted_subscriptions"],
+      "impact_fields": {
+        "overlapping_regions": "list[str] — regions present in BOTH dependency evidence AND primary-service resource footprint",
+        "dependency_services_at_risk": "list[{dependency_service_name, regions, subscription_count, resource_count}]",
+        "impacted_subscriptions": "list[str] — REQUIRED. Customer primary-service SubscriptionId values whose region falls inside overlapping_regions (deduplicated).",
+        "primary_resources_at_risk": "list[{resource_id, resource_type, region}] (optional — populate when evidence carries ResourceId values; emit [] otherwise)",
+        "subscription_count": "int — len(impacted_subscriptions)",
+        "resource_count": "int — primary resources in overlapping_regions (0 if per-resource IDs unavailable)"
+      },
+      "payload_template": {
+        "to": "{aed_team_distribution_list}",
+        "subject": "[RATIO] Potential risk for {customer_name} — dependency impact in shared region(s)",
+        "body": "Heads-up: dependency service(s) show confirmed impact in region(s) where {customer_name} has primary-service resources.\n\nDependencies at risk:\n{dependency_services_at_risk}\n\nOverlapping regions: {overlapping_regions}\nPrimary resources potentially at risk: {resource_count} across {subscription_count} subscription(s).\n\nCorrelation ID: {correlation_id}"
+      }
+    },
+    {
+      "action_id": "INC-DEPENDENCY-SVC",
+      "display_name": "Create Incident for Dependency Service Team",
+      "action_type": "incident",
+      "grain": "per_service",
+      "tier": "auto",
+      "merge_within_correlation_group": true,
+      "description": "Create one IcM incident per dependency service that shows confirmed impact. Recipient is the owning team for that dependency. Emit one action per distinct dependency service (service_scope != __primary__) across the correlation window. When multiple lanes in the same correlation group hit the SAME dependency, collapse into ONE incident whose upstream_customers/structured_evidence list every originating lane.",
+      "applies_when": {
+        "scope_in": ["<dependency_slug>"],
+        "min_confidence": 0.5,
+        "verdict_in": ["confirmed", "resolved_as_contributing"],
+        "applicable_hypotheses": [
+          "HYP-DEP-001", "HYP-DEP-002"
+        ],
+        "applicable_categories": ["dependency"]
+      },
+      "evidence_required": ["xcv", "hypothesis_id", "er_id", "dependency_service_name"],
+      "impact_fields": {
+        "regions": "list[str]",
+        "subscription_count": "int",
+        "resource_count": "int",
+        "impacted_subscriptions": "list[str] (optional — dependency evidence does NOT carry customer-side SubscriptionIds; emit [] unless the dependency analysis exposes them)",
+        "impacted_resources": "list[{resource_id, resource_type, region}] (optional — populate when evidence carries ResourceId values; emit [] otherwise)",
+        "upstream_customers": "list[str] — customers impacted via this dependency (current customer at minimum)"
+      },
+      "payload_template": {
+        "title": "RATIO: Dependency {dependency_service_name} impacting downstream customer(s)",
+        "severity": "{investigation_severity}",
+        "owning_team": "{dependency_service_team}",
+        "body": "Dependency service: {dependency_service_name}\nRegions impacted: {regions}\nSubscriptions impacted: {subscription_count}\nResources impacted: {resource_count}\nDownstream customer(s) affected: {upstream_customers}\n\nEvidence references:\n{structured_evidence}\n\n{correlation_context}"
+      }
+    }
+  ]
+}

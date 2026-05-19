@@ -16,6 +16,7 @@ import math
 import operator
 import os
 import re as _re
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -32,11 +33,242 @@ from helper.errors import (
     PipelineError, NetworkError, AuthError, ToolError, ConfigError,
     classify_exception,
 )
-from helper.agent_logger import AgentLogger, get_current_xcv, set_current_xcv, generate_xcv, set_current_service_tree_id
+from helper.agent_logger import AgentLogger, get_current_xcv, set_current_xcv, generate_xcv, set_current_service_tree_id, set_current_customer_name
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "config"))
+
+# ── ADLS persistence (in-memory pipeline) ─────────────────────────
+# Lazy singleton SandboxClient used only for ADLS uploads from the
+# non-sandboxed evaluators. Created on first use so that environments
+# without ADLS configured can skip persistence silently.
+_PERSIST_CLIENT: Any = None
+_PERSIST_DISABLED = False
+
+
+def _get_persist_client():
+    """Return a SandboxClient for ADLS uploads, or None if unavailable."""
+    global _PERSIST_CLIENT, _PERSIST_DISABLED
+    if _PERSIST_DISABLED:
+        return None
+    if _PERSIST_CLIENT is not None:
+        return _PERSIST_CLIENT
+    if not (os.getenv("ADLS_ACCOUNT") and os.getenv("ADLS_FILESYSTEM")):
+        _PERSIST_DISABLED = True
+        logger.warning(
+            "ADLS_ACCOUNT/ADLS_FILESYSTEM not set; signal persistence disabled "
+            "(ADLS_ACCOUNT=%r ADLS_FILESYSTEM=%r)",
+            os.getenv("ADLS_ACCOUNT"), os.getenv("ADLS_FILESYSTEM"),
+        )
+        return None
+    try:
+        from core.sandbox.client import SandboxClient
+        _PERSIST_CLIENT = SandboxClient()
+        logger.info("ADLS persistence client initialised (account=%s fs=%s)",
+                    os.getenv("ADLS_ACCOUNT"), os.getenv("ADLS_FILESYSTEM"))
+    except Exception:
+        _PERSIST_DISABLED = True
+        logger.exception("Could not initialise SandboxClient for ADLS persistence")
+        return None
+    return _PERSIST_CLIENT
+
+
+async def _persist_result_to_adls(
+    context: dict[str, Any],
+    type_results_list: list[TypeSignalResult],
+    result: SignalBuilderResult,
+) -> None:
+    """Best-effort write of raw-matched rows + aggregated per-type + final result to ADLS.
+
+    Layout (controlled by env ``SIGNAL_PERSIST_LAYOUT``; default ``per_grain``):
+
+    ``flat`` (legacy)::
+
+        {ADLS_BASE_PATH}/{xcv}/signals/raw/{type_id}.json         — matched rows (all grains pooled)
+        {ADLS_BASE_PATH}/{xcv}/signals/aggregated/{type_id}.json  — per-type aggregate
+
+    ``per_grain``::
+
+        {ADLS_BASE_PATH}/{xcv}/signals/raw/{type_id}/{granularity}.json         — one raw file per activated grain
+        {ADLS_BASE_PATH}/{xcv}/signals/aggregated/{type_id}/{granularity}.json  — one aggregated file per activated grain
+
+    Common::
+
+        {ADLS_BASE_PATH}/{xcv}/signals/result.json    — full SignalBuilderResult
+        {ADLS_BASE_PATH}/{xcv}/signals/manifest.json  — index of all artifacts
+    """
+    client = _get_persist_client()
+    if client is None:
+        logger.info("ADLS persist skipped (client unavailable)")
+        return
+
+    xcv = result.xcv or get_current_xcv()
+    if not xcv:
+        logger.warning("ADLS persist skipped (no XCV in scope)")
+        return
+
+    base = os.getenv("ADLS_BASE_PATH", "customeragent").strip("/")
+    prefix = f"{base}/{xcv}/signals"
+    layout = os.getenv("SIGNAL_PERSIST_LAYOUT", "per_grain").strip().lower()
+    if layout not in ("flat", "per_grain"):
+        logger.warning("Unknown SIGNAL_PERSIST_LAYOUT=%r, defaulting to 'per_grain'", layout)
+        layout = "per_grain"
+    t0 = time.monotonic()
+    logger.info(
+        "ADLS persist starting prefix=%s types=%d layout=%s",
+        prefix, len(type_results_list), layout,
+    )
+
+    # Per-type manifest entries built alongside writes so we can record
+    # the exact files emitted for each granularity.
+    manifest_signal_types: list[dict[str, Any]] = []
+    files_written: list[str] = []
+    try:
+        # Per-type raw matched rows + aggregated record
+        for tr in type_results_list:
+            grain_entries: list[dict[str, Any]] = []
+
+            if layout == "per_grain":
+                # One raw + one aggregated file per (type, granularity), using
+                # the exact grain name from the signal template as filename.
+                for sig in tr.activated_signals:
+                    grain_rows: list[dict[str, Any]] = []
+                    for row in sig.matched_rows:
+                        enriched = dict(row)
+                        enriched.setdefault("_signal_type_id", tr.signal_type_id)
+                        enriched.setdefault("_granularity", sig.granularity)
+                        grain_rows.append(enriched)
+                    raw_rel = f"raw/{tr.signal_type_id}/{sig.granularity}.json"
+                    agg_rel = f"aggregated/{tr.signal_type_id}/{sig.granularity}.json"
+                    raw_path = f"{prefix}/{raw_rel}"
+                    agg_path = f"{prefix}/{agg_rel}"
+                    await client.upload_file(raw_path, json.dumps(grain_rows, default=str, indent=2))
+                    await client.upload_file(agg_path, json.dumps(sig.to_dict(), default=str, indent=2))
+                    files_written.extend([raw_path, agg_path])
+                    grain_entries.append({
+                        "granularity": sig.granularity,
+                        "raw_file": raw_rel,
+                        "aggregated_file": agg_rel,
+                        "row_count": len(grain_rows),
+                        "confidence": sig.confidence,
+                        "strength": round(sig.strength, 4),
+                        "raw_strength": round(sig.raw_strength, 4),
+                    })
+                primary_raw_file: Any = None
+                primary_agg_file: Any = None
+            else:
+                # Legacy: one pooled raw + one pooled aggregated file per type.
+                agg_rel = f"aggregated/{tr.signal_type_id}.json"
+                agg_path = f"{prefix}/{agg_rel}"
+                await client.upload_file(agg_path, json.dumps(tr.to_dict(), default=str, indent=2))
+                files_written.append(agg_path)
+
+                matched_rows: list[dict[str, Any]] = []
+                for sig in tr.activated_signals:
+                    for row in sig.matched_rows:
+                        enriched = dict(row)
+                        enriched.setdefault("_signal_type_id", tr.signal_type_id)
+                        enriched.setdefault("_granularity", sig.granularity)
+                        matched_rows.append(enriched)
+                raw_rel = f"raw/{tr.signal_type_id}.json"
+                raw_path = f"{prefix}/{raw_rel}"
+                await client.upload_file(raw_path, json.dumps(matched_rows, default=str, indent=2))
+                files_written.append(raw_path)
+                grain_entries = [
+                    {"granularity": s.granularity} for s in tr.activated_signals
+                ]
+                primary_raw_file = raw_rel
+                primary_agg_file = agg_rel
+
+            manifest_signal_types.append({
+                "id": tr.signal_type_id,
+                "name": tr.signal_name,
+                "raw_file": primary_raw_file,
+                "aggregated_file": primary_agg_file,
+                "row_count": tr.row_count,
+                "has_data": tr.has_data,
+                "max_strength": round(tr.max_strength, 4),
+                "best_confidence": tr.best_confidence,
+                "activated_granularities": grain_entries,
+            })
+
+        # Final result envelope (mirrors SignalBuilderResult.to_dict)
+        result_path = f"{prefix}/result.json"
+        await client.upload_file(
+            result_path,
+            json.dumps(result.to_dict(), default=str, indent=2),
+        )
+        files_written.append(result_path)
+
+        # Manifest (mirrors sandboxed-pipeline DataFetchManifest schema so
+        # downstream consumers can use one contract regardless of which
+        # path produced the artifacts).
+        manifest = {
+            "xcv": xcv,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "customer_name": result.customer_name,
+            "service_tree_id": result.service_tree_id,
+            "service_name": result.service_name,
+            "start_time": result.start_time,
+            "end_time": result.end_time,
+            "output_dir": prefix,
+            "source": "in_memory_pipeline",
+            "layout": layout,
+            "signal_types": manifest_signal_types,
+            "compound_results": [
+                {
+                    "id": c.compound_id,
+                    "name": c.compound_name,
+                    "activated": c.activated,
+                    "confidence": c.confidence,
+                    "strength": round(c.strength, 4),
+                }
+                for c in result.compound_results
+            ],
+            "action": result.action,
+            "result_file": "result.json",
+        }
+        manifest_path = f"{prefix}/manifest.json"
+        await client.upload_file(manifest_path, json.dumps(manifest, default=str, indent=2))
+        files_written.append(manifest_path)
+
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+        logger.info(
+            "ADLS persist complete prefix=%s types=%d files=%d duration_ms=%.1f layout=%s",
+            prefix, len(type_results_list), len(files_written), elapsed_ms, layout,
+        )
+
+        # Emit App Insights event (same pattern as data_fetch_complete in fetch_tools.py)
+        try:
+            AgentLogger.get_instance()._emit("signal_persist_complete", xcv, {
+                "AdlsAccount": os.getenv("ADLS_ACCOUNT", ""),
+                "AdlsFilesystem": os.getenv("ADLS_FILESYSTEM", ""),
+                "Prefix": prefix,
+                "Layout": layout,
+                "TypeCount": len(type_results_list),
+                "FileCount": len(files_written),
+                "DurationMs": elapsed_ms,
+                "Action": result.action,
+                "ServiceTreeId": result.service_tree_id,
+                "CustomerName": result.customer_name,
+            })
+        except Exception:
+            logger.debug("signal_persist_complete telemetry emit failed", exc_info=True)
+    except Exception as exc:
+        logger.exception("ADLS persistence failed for xcv=%s prefix=%s", xcv, prefix)
+        try:
+            AgentLogger.get_instance()._emit("signal_persist_failed", xcv, {
+                "AdlsAccount": os.getenv("ADLS_ACCOUNT", ""),
+                "AdlsFilesystem": os.getenv("ADLS_FILESYSTEM", ""),
+                "Prefix": prefix,
+                "TypeCount": len(type_results_list),
+                "FilesWritten": len(files_written),
+                "Error": str(exc),
+                "ErrorType": type(exc).__name__,
+            })
+        except Exception:
+            logger.debug("signal_persist_failed telemetry emit failed", exc_info=True)
 
 
 # ── Config loaders ────────────────────────────────────────────────
@@ -570,6 +802,7 @@ _AGGREGATE_FUNCTIONS: dict[str, AggregateFn] = {
     "count_where":    _agg_count_where,
     "sum":            _agg_sum,
     "avg":            _agg_avg,
+    "mean":           _agg_avg,  # alias for avg
     "min":            _agg_min,
     "max":            _agg_max,
     "median":         _agg_median,
@@ -751,6 +984,37 @@ async def _evaluate_dependency_signal_type(
 
     logger.info("SIG-TYPE-4: Customer regions discovered: %s", customer_regions)
 
+    # Persist customer regions to ADLS for traceability/debugging.
+    persist_client = _get_persist_client()
+    xcv_for_persist = get_current_xcv() or ""
+    adls_base_for_persist = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
+    dep_raw_prefix = (
+        f"{adls_base_for_persist}/{xcv_for_persist}/signals/raw/{type_id}"
+        if persist_client and xcv_for_persist
+        else None
+    )
+
+    if dep_raw_prefix:
+        regions_path = f"{dep_raw_prefix}/customer_regions.json"
+        regions_payload = {
+            "service_tree_id": context.get("service_tree_id", ""),
+            "customer_name": context.get("customer_name", ""),
+            "tool": region_cfg["tool_name"],
+            "row_count": len(region_rows),
+            "customer_regions": sorted(customer_regions),
+            "raw_rows": region_rows,
+        }
+        try:
+            await persist_client.upload_file(
+                regions_path, json.dumps(regions_payload, default=str, indent=2)
+            )
+            logger.info(
+                "%s: wrote customer regions file (%d regions, %d raw rows) → adls:%s",
+                type_id, len(customer_regions), len(region_rows), regions_path,
+            )
+        except Exception:
+            logger.exception("Failed to write customer regions file %s", regions_path)
+
     # Step 2: Load dependency mappings → resolve dep files for this primary service
     dep_mappings = _load_json("dependency_services/dependency_mappings.json")
     primary_stid = context.get("service_tree_id", "")
@@ -819,6 +1083,9 @@ async def _evaluate_dependency_signal_type(
         return_exceptions=True,
     )
 
+    # Per-dependency raw responses are written to the same prefix used for
+    # customer_regions.json above (dep_raw_prefix).
+
     for result in dep_results:
         if isinstance(result, BaseException):
             logger.error("Parallel dependency tool call failed for %s: %s", type_id, result, exc_info=result)
@@ -826,15 +1093,55 @@ async def _evaluate_dependency_signal_type(
         dep_name, dep_category, rows = result
 
         # Step 4: Filter to customer regions and enrich with dependency name + category
+        dep_filtered: list[dict[str, Any]] = []
+        regions_seen: set[str] = set()
         for row in rows:
             norm = _normalise_row(row)
             row_region = (norm.get("region", norm.get("Region", "")) or "").lower()
+            if row_region:
+                regions_seen.add(row_region)
             if row_region in customer_regions:
                 norm["DependencyServiceName"] = dep_name
                 norm["dependency_service_name"] = dep_name
                 norm["DependencyCategory"] = dep_category
                 norm["dependency_category"] = dep_category
-                all_rows.append(norm)
+                dep_filtered.append(norm)
+
+        if rows and not dep_filtered:
+            logger.warning(
+                "%s [%s]: %d raw rows returned but 0 matched customer regions "
+                "(regions_seen=%s, customer_regions=%s)",
+                type_id, dep_name, len(rows), sorted(regions_seen), sorted(customer_regions),
+            )
+
+        all_rows.extend(dep_filtered)
+
+        # Write per-dependency raw file to ADLS for evidence/debugging.
+        if dep_raw_prefix and rows:
+            safe_name = (
+                dep_name.replace(" ", "_").replace("/", "_").lower() or "unknown"
+            )
+            dep_path = f"{dep_raw_prefix}/dep_{safe_name}.json"
+            payload = {
+                "dependency_service_name": dep_name,
+                "dependency_category": dep_category,
+                "customer_regions": sorted(customer_regions),
+                "regions_seen": sorted(regions_seen),
+                "raw_row_count": len(rows),
+                "matched_row_count": len(dep_filtered),
+                "raw_rows": rows,
+                "matched_rows": dep_filtered,
+            }
+            try:
+                await persist_client.upload_file(
+                    dep_path, json.dumps(payload, default=str, indent=2)
+                )
+                logger.info(
+                    "%s [%s]: wrote per-dep raw file (%d raw, %d matched) → adls:%s",
+                    type_id, dep_name, len(rows), len(dep_filtered), dep_path,
+                )
+            except Exception:
+                logger.exception("Failed to write per-dep raw file %s", dep_path)
 
     # Step 5: Evaluate granularities via shared helper
     return _evaluate_granularities(sig_type, all_rows)
@@ -1225,7 +1532,7 @@ async def _evaluate_for_context(
             compound_count=len(activated_compounds),
         )
 
-    return SignalBuilderResult(
+    result = SignalBuilderResult(
         type_results=type_results_list,
         compound_results=compound_results,
         action=action,
@@ -1238,6 +1545,13 @@ async def _evaluate_for_context(
         owning_tenant_names=json.loads(context.get("owning_tenant_names", "[]")),
         support_product_names=json.loads(context.get("support_product_names", "[]")),
     )
+
+    # Best-effort persist to ADLS (raw matched rows + per-type aggregate + result).
+    # Failures are swallowed inside _persist_result_to_adls so the pipeline is
+    # never blocked by storage hiccups or missing config.
+    await _persist_result_to_adls(context, type_results_list, result)
+
+    return result
 
 
 async def evaluate_signals(
@@ -1357,8 +1671,23 @@ async def evaluate_signals_stream(
     # Collect all contexts across all targets
     all_contexts: list[dict[str, Any]] = []
     for target in monitoring_context.get("targets", []):
+        if target.get("enabled", True) is False:
+            logger.info(
+                "signal_builder: skipping disabled target customer=%s",
+                target.get("customer_name"),
+            )
+            continue
         customer_name = target["customer_name"]
-        service_tree_ids = target.get("service_tree_ids", [])
+        service_tree_ids = [
+            e for e in target.get("service_tree_ids", [])
+            if not (isinstance(e, dict) and e.get("enabled", True) is False)
+        ]
+        for skipped in target.get("service_tree_ids", []):
+            if isinstance(skipped, dict) and skipped.get("enabled", True) is False:
+                logger.info(
+                    "signal_builder: skipping disabled service customer=%s service_tree_id=%s name=%s",
+                    customer_name, skipped.get("id"), skipped.get("name"),
+                )
         if not service_tree_ids:
             all_contexts.append({"customer_name": customer_name, "service_tree_id": "", "service_name": "", "start_time": start_time_str, "end_time": end_time_str, "support_product_names": "[]", "owning_tenant_names": "[]"})
         else:
@@ -1419,6 +1748,44 @@ async def _run_investigations(
         max_concurrent: Maximum number of concurrent investigations.
     """
     actionable = [r for r in results if r.action == "invoke_group_chat"]
+    non_actionable = [r for r in results if r.action != "invoke_group_chat"]
+
+    # Always publish a terminal outcome for results that won't trigger an
+    # investigation, so the Interpreter's correlator can flush its window
+    # promptly instead of waiting for max_wait_minutes. Best-effort: failures
+    # here must not block actionable investigations.
+    if non_actionable:
+        try:
+            from core.services.publisher.outcome_publisher import publish_outcome
+        except Exception:
+            publish_outcome = None  # type: ignore[assignment]
+            logger.exception(
+                "Failed to import publish_outcome; skipping no-signal notifications"
+            )
+        if publish_outcome is not None:
+            for r in non_actionable:
+                xcv = r.xcv or generate_xcv()
+                set_current_xcv(xcv)
+                try:
+                    asyncio.ensure_future(publish_outcome(
+                        customer_name=r.customer_name,
+                        xcv=xcv,
+                        investigation=None,
+                        activated_signals=[],
+                        activated_compounds=[],
+                        status="no_signal",
+                        reason=f"action={r.action}",
+                        service_tree_id=r.service_tree_id,
+                        service_name=r.service_name,
+                        investigation_id=xcv,
+                        phase="signal_builder",
+                    ))
+                except Exception:
+                    logger.exception(
+                        "Failed to schedule no-signal publish for %s/%s",
+                        r.customer_name, r.service_tree_id,
+                    )
+
     if not actionable:
         return
 
@@ -1471,12 +1838,24 @@ async def run_signal_builder_loop(
     interval = poll_override_seconds or monitoring_ctx.get("poll_interval_minutes", 10) * 60
     max_concurrent = monitoring_ctx.get("max_concurrent_investigations", 5)
 
-    logger.info("SignalBuilder loop starting (interval=%ds, targets=%d, max_concurrent=%d)",
-                interval, len(monitoring_ctx.get("targets", [])), max_concurrent)
+    pipeline_mode = os.getenv("SIGNAL_PIPELINE", "in_memory").strip().lower()
+    if pipeline_mode not in ("in_memory", "sandboxed"):
+        logger.warning(
+            "Unknown SIGNAL_PIPELINE=%r — defaulting to 'in_memory'", pipeline_mode,
+        )
+        pipeline_mode = "in_memory"
+
+    logger.info(
+        "SignalBuilder loop starting (pipeline=%s, interval=%ds, targets=%d, max_concurrent=%d)",
+        pipeline_mode, interval, len(monitoring_ctx.get("targets", [])), max_concurrent,
+    )
 
     while True:
         try:
-            results = await evaluate_signals(monitoring_context=monitoring_ctx)
+            if pipeline_mode == "sandboxed":
+                results = await evaluate_signals_sandboxed(monitoring_context=monitoring_ctx)
+            else:
+                results = await evaluate_signals(monitoring_context=monitoring_ctx)
 
             if on_group_chat is not None:
                 await _run_investigations(results, on_group_chat, max_concurrent)
@@ -1495,34 +1874,59 @@ async def run_signal_builder_loop(
 async def _evaluate_signal_type_from_aggregated(
     sig_type: dict[str, Any],
     aggregated_dir: str,
+    client: Any | None = None,
+    aggregated_payload: dict[str, list[dict[str, Any]]] | None = None,
 ) -> TypeSignalResult:
-    """Evaluate a signal type from pre-aggregated sandbox output.
+    """Evaluate a signal type from pre-aggregated Stage 2 output.
 
-    Reads the aggregated JSON files produced by Stage 2
-    (aggregation_script_builder) and runs activation/strength logic
-    in-process (Stage 3).
+    Two input modes:
+
+    * ``aggregated_payload`` — already in memory (preferred fast path,
+      avoids an ADLS round-trip). Keys are granularity names, values are
+      the per-group records produced by Stage 2.
+    * ``client`` + ``aggregated_dir`` — read aggregated JSON from ADLS
+      (legacy / fallback path).
 
     Args:
         sig_type: Signal type config from signal_template.json.
-        aggregated_dir: Path to the aggregated output directory
-            (e.g., /mnt/data/{xcv}/signals/aggregated/{type_id}/).
+        aggregated_dir: ADLS prefix to the aggregated output directory.
+            Only used when ``aggregated_payload`` is None.
+        client: SandboxClient used to read aggregated JSON from ADLS when
+            ``aggregated_payload`` is None.
+        aggregated_payload: Optional in-memory ``{granularity: [rows]}``
+            dict produced by the host after Stage 2 stdout parse.
     """
     type_id = sig_type["id"]
-    type_name = sig_type["name"]
     all_rows: list[dict[str, Any]] = []
     granularity_rows: dict[str, list[dict[str, Any]]] = {}
 
-    for gran_cfg in sig_type.get("granularities", []):
-        gran_name = gran_cfg["granularity"]
-        gran_file = os.path.join(aggregated_dir, f"{gran_name}.json")
-        if not os.path.isfile(gran_file):
-            logger.debug("Aggregated file missing for %s/%s — skipping", type_id, gran_name)
-            granularity_rows[gran_name] = []
-            continue
-        with open(gran_file, "r", encoding="utf-8") as f:
-            groups = json.load(f)
-        granularity_rows[gran_name] = groups
-        all_rows.extend(groups)
+    if aggregated_payload is not None:
+        for gran_cfg in sig_type.get("granularities", []):
+            gran_name = gran_cfg["granularity"]
+            groups = aggregated_payload.get(gran_name) or []
+            granularity_rows[gran_name] = groups
+            all_rows.extend(groups)
+    else:
+        if client is None:
+            raise ValueError(
+                "_evaluate_signal_type_from_aggregated requires either "
+                "aggregated_payload or a SandboxClient"
+            )
+        for gran_cfg in sig_type.get("granularities", []):
+            gran_name = gran_cfg["granularity"]
+            gran_path = f"{aggregated_dir.rstrip('/')}/{gran_name}.json"
+            try:
+                content = await client.read_file(gran_path)
+            except Exception as exc:
+                logger.debug(
+                    "Aggregated file missing for %s/%s at adls:%s (%s) — skipping",
+                    type_id, gran_name, gran_path, exc,
+                )
+                granularity_rows[gran_name] = []
+                continue
+            groups = json.loads(content)
+            granularity_rows[gran_name] = groups
+            all_rows.extend(groups)
 
     return _evaluate_granularities(sig_type, all_rows, granularity_rows or None)
 
@@ -1531,23 +1935,23 @@ async def evaluate_signals_sandboxed(
     template: dict[str, Any] | None = None,
     monitoring_context: dict[str, Any] | None = None,
 ) -> list[SignalBuilderResult]:
-    """Sandboxed 3-stage signal evaluation pipeline.
+    """Sandboxed 3-stage signal evaluation pipeline (host-IO pattern).
 
-    Stage 1: Fetch raw data via MCP tools → persist to disk.
-    Stage 2: Generate & execute aggregation script in sandbox.
-    Stage 3: Evaluate activation rules & strengths in-process.
+    Stage 1: Fetch raw data via MCP tools → persist to ADLS (host-side).
+    Stage 2: Read raw rows back, send them to a Dynamic Session as the
+             ``RAW_DATA`` constant; the sandbox runs a pure-compute kernel
+             (no IO) and returns the aggregated payload via stdout. Host
+             then writes ``aggregated/{type_id}/{grain}.json`` to ADLS.
+    Stage 3: Evaluate activation rules in-process from the in-memory dict.
 
     Falls back to in-memory ``evaluate_signals()`` on sandbox failure.
-
-    Args:
-        template: Parsed signal_template.json (loaded if None).
-        monitoring_context: Monitoring context (loaded if None).
-
-    Returns:
-        List of SignalBuilderResult, one per monitoring target.
     """
     from core.services.signals.data_fetcher import fetch_and_persist
-    from core.services.signals.aggregation_script_builder import build_aggregation_script
+    from core.services.signals.aggregation_script_builder import (
+        build_aggregation_script,
+        RESULT_BEGIN,
+        RESULT_END,
+    )
     from core.sandbox.client import SandboxClient
 
     if template is None:
@@ -1557,67 +1961,155 @@ async def evaluate_signals_sandboxed(
 
     results: list[SignalBuilderResult] = []
 
-    # Resolve targets
     all_contexts = _resolve_monitoring_contexts(template, monitoring_context)
     if not all_contexts:
         return results
 
     sandbox = SandboxClient()
+    adls_base = os.getenv("ADLS_BASE_PATH", "customeragent").strip("/")
 
     for context in all_contexts:
         xcv = generate_xcv()
         set_current_xcv(xcv)
         set_current_service_tree_id(context["service_tree_id"])
+        customer_name = context.get("customer_name", "unknown")
+        set_current_customer_name(customer_name)
 
-        output_dir = f"/mnt/data/{xcv}/signals"
+        output_dir = f"{adls_base}/{xcv}/signals"
 
         try:
-            # Stage 1: Fetch and persist
-            manifest = await fetch_and_persist(template, context, output_dir)
+            # ── Stage 1: Fetch raw → ADLS (host-side) ───────────────────
+            t_stage1 = time.monotonic()
+            manifest = await fetch_and_persist(
+                template, context, output_dir, client=sandbox,
+            )
+            stage1_ms = round((time.monotonic() - t_stage1) * 1000, 1)
+            types_with_data = sum(1 for e in manifest.signal_types if e.row_count > 0)
             logger.info(
-                "Stage 1 complete for %s/%s: %d types with data",
-                context.get("customer_name", "?"),
-                context.get("service_tree_id", "?"),
-                sum(1 for e in manifest.signal_types if e.row_count > 0),
+                "Stage 1 complete for %s/%s: %d types with data (%.1fms)",
+                customer_name, context.get("service_tree_id", "?"),
+                types_with_data, stage1_ms,
             )
 
-            # Stage 2: Build and execute aggregation script
+            if types_with_data == 0:
+                logger.info(
+                    "No raw data fetched for %s/%s — skipping sandbox aggregation",
+                    customer_name, context.get("service_tree_id", "?"),
+                )
+                # Build an empty result so symptom mapping still runs.
+                empty = SignalBuilderResult(
+                    type_results=[],
+                    compound_results=[],
+                    action="no_action",
+                    customer_name=customer_name,
+                    service_tree_id=context.get("service_tree_id", ""),
+                    service_name=context.get("service_name", ""),
+                    xcv=xcv,
+                    start_time=context.get("start_time", ""),
+                    end_time=context.get("end_time", ""),
+                    owning_tenant_names=json.loads(context.get("owning_tenant_names", "[]")),
+                    support_product_names=json.loads(context.get("support_product_names", "[]")),
+                )
+                results.append(empty)
+                continue
+
+            # ── Stage 2a: Read raw rows host-side and assemble RAW_DATA ─
+            raw_data: dict[str, list[dict[str, Any]]] = {}
+            for entry in manifest.signal_types:
+                if entry.row_count == 0:
+                    continue
+                sig_type = next(
+                    (st for st in template.get("signal_types", []) if st["id"] == entry.id),
+                    None,
+                )
+                if sig_type is None:
+                    continue
+                strategy = sig_type.get("collection_strategy", "standard")
+                try:
+                    if strategy == "dependency_scan":
+                        # Stage 1 wrote per-dep files under
+                        # ``signals/{type_id}/dep_*.json``. Merge them all.
+                        dep_dir = f"{output_dir}/{entry.id}"
+                        merged: list[dict[str, Any]] = []
+                        for path in await sandbox.list_files(dep_dir, recursive=False):
+                            base = path.rsplit("/", 1)[-1]
+                            if not (base.startswith("dep_") and base.endswith(".json")):
+                                continue
+                            content = await sandbox.read_file(path)
+                            merged.extend(json.loads(content))
+                        raw_data[entry.id] = merged
+                    else:
+                        # Standard types live at ``signals/{type_id}.json``.
+                        path = f"{output_dir}/{entry.file or entry.id + '.json'}"
+                        content = await sandbox.read_file(path)
+                        raw_data[entry.id] = json.loads(content)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read raw rows for %s from ADLS: %s — using empty",
+                        entry.id, exc,
+                    )
+                    raw_data[entry.id] = []
+
+            # ── Stage 2b: Run pure-compute kernel in sandbox ────────────
+            t_stage2 = time.monotonic()
             script = build_aggregation_script(manifest, template)
             sandbox_result = await sandbox.execute(
                 code=script,
                 filename="aggregate_signals.py",
                 session_id=xcv,
+                extra_constants={"XCV": xcv, "RAW_DATA": raw_data},
+                inject_adls_token=False,  # script does no IO; no token needed
             )
+            stage2_ms = round((time.monotonic() - t_stage2) * 1000, 1)
             if not sandbox_result.success:
                 logger.error(
-                    "Sandbox aggregation failed for %s/%s:\n%s",
-                    context.get("customer_name", "?"),
-                    context.get("service_tree_id", "?"),
-                    sandbox_result.stderr,
+                    "Sandbox aggregation failed for %s/%s (%.1fms):\nstderr=%s\nstdout=%s",
+                    customer_name, context.get("service_tree_id", "?"),
+                    stage2_ms, sandbox_result.stderr, sandbox_result.stdout,
                 )
-                # Fallback to in-memory
                 logger.warning("Falling back to in-memory evaluation")
                 result = await _evaluate_for_context(template, context)
                 results.append(result)
                 continue
 
+            aggregated_by_type = _parse_sandbox_aggregation_output(
+                sandbox_result.stdout, RESULT_BEGIN, RESULT_END,
+            )
+            if aggregated_by_type is None:
+                logger.error(
+                    "Could not extract aggregation payload from sandbox stdout "
+                    "for %s/%s — falling back to in-memory",
+                    customer_name, context.get("service_tree_id", "?"),
+                )
+                result = await _evaluate_for_context(template, context)
+                results.append(result)
+                continue
+
             logger.info(
-                "Stage 2 complete for %s/%s (sandbox %.2fs)",
-                context.get("customer_name", "?"),
-                context.get("service_tree_id", "?"),
-                sandbox_result.duration_seconds,
+                "Stage 2 complete for %s/%s (sandbox %.2fs / wall %.1fms, %d types aggregated)",
+                customer_name, context.get("service_tree_id", "?"),
+                sandbox_result.duration_seconds, stage2_ms, len(aggregated_by_type),
             )
 
-            # Stage 3: Evaluate from aggregated files
-            aggregated_base = os.path.join(output_dir, "aggregated")
+            # ── Stage 2c: Persist aggregated files to ADLS host-side ────
+            for type_id, per_grain in aggregated_by_type.items():
+                for grain_name, rows in per_grain.items():
+                    agg_path = f"{output_dir}/aggregated/{type_id}/{grain_name}.json"
+                    await sandbox.upload_file(
+                        agg_path, json.dumps(rows, default=str, indent=2),
+                    )
+
+            # ── Stage 3: Activation/strength in-process from in-memory dict ─
+            t_stage3 = time.monotonic()
             signal_types = template.get("signal_types", [])
             type_results_list: list[TypeSignalResult] = []
-
             for sig_type in signal_types:
                 type_id = sig_type["id"]
-                type_agg_dir = os.path.join(aggregated_base, type_id)
+                payload = aggregated_by_type.get(type_id)
                 type_result = await _evaluate_signal_type_from_aggregated(
-                    sig_type, type_agg_dir,
+                    sig_type,
+                    aggregated_dir="",  # unused when payload is provided
+                    aggregated_payload=payload,
                 )
                 type_results_list.append(type_result)
                 logger.info(
@@ -1626,17 +2118,17 @@ async def evaluate_signals_sandboxed(
                     len(type_result.activated_signals), type_result.max_strength,
                 )
 
-            # Compounds + decision
             type_results_map = {tr.signal_type_id: tr for tr in type_results_list}
             compound_cfgs = template.get("compound_signals", [])
             compound_results = _evaluate_compounds(compound_cfgs, type_results_map)
             action = _evaluate_decision_rules(template, type_results_list, compound_results)
+            stage3_ms = round((time.monotonic() - t_stage3) * 1000, 1)
 
-            results.append(SignalBuilderResult(
+            sb_result = SignalBuilderResult(
                 type_results=type_results_list,
                 compound_results=compound_results,
                 action=action,
-                customer_name=context.get("customer_name", ""),
+                customer_name=customer_name,
                 service_tree_id=context.get("service_tree_id", ""),
                 service_name=context.get("service_name", ""),
                 xcv=xcv,
@@ -1644,14 +2136,32 @@ async def evaluate_signals_sandboxed(
                 end_time=context.get("end_time", ""),
                 owning_tenant_names=json.loads(context.get("owning_tenant_names", "[]")),
                 support_product_names=json.loads(context.get("support_product_names", "[]")),
-            ))
+            )
+            results.append(sb_result)
+
+            logger.info(
+                "Sandboxed pipeline summary for %s/%s: stage1=%.1fms stage2=%.1fms stage3=%.1fms action=%s",
+                customer_name, context.get("service_tree_id", "?"),
+                stage1_ms, stage2_ms, stage3_ms, action,
+            )
+
+            # Persist final result envelope + per-grain evidence files for
+            # downstream symptom mapping / investigations. Reuses the same
+            # writer as the in-memory pipeline so artifacts share one schema.
+            try:
+                await _persist_result_to_adls(context, type_results_list, sb_result)
+            except Exception as persist_exc:
+                logger.warning(
+                    "ADLS result persist failed for %s/%s: %s",
+                    customer_name, context.get("service_tree_id", "?"),
+                    persist_exc,
+                )
 
         except Exception as exc:
             classified = classify_exception(exc)
             logger.exception(
                 "Sandboxed evaluation failed for %s/%s [%s] — falling back",
-                context.get("customer_name", "?"),
-                context.get("service_tree_id", "?"),
+                customer_name, context.get("service_tree_id", "?"),
                 type(classified).__name__,
             )
             try:
@@ -1661,6 +2171,30 @@ async def evaluate_signals_sandboxed(
                 logger.exception("Fallback also failed: %s", fallback_exc)
 
     return results
+
+
+def _parse_sandbox_aggregation_output(
+    stdout: str, begin: str, end: str,
+) -> dict[str, dict[str, list[dict[str, Any]]]] | None:
+    """Extract the JSON payload framed by ``begin``/``end`` markers in stdout.
+
+    Returns ``None`` if the markers are missing or the payload is malformed.
+    """
+    if not stdout:
+        return None
+    start = stdout.find(begin)
+    if start < 0:
+        return None
+    start += len(begin)
+    stop = stdout.find(end, start)
+    if stop < 0:
+        return None
+    payload = stdout[start:stop].strip()
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as exc:
+        logger.error("Aggregation stdout JSON decode failed: %s", exc)
+        return None
 
 
 def _resolve_monitoring_contexts(

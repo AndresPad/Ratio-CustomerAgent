@@ -23,7 +23,8 @@
       ],
       "min_symptoms_for_match": 1,
       "required_symptoms": [
-        "SYM-SUP-001"
+        "SYM-SUP-001", 
+        "SYM-OUT-001"
       ],
       "evidence_needed": [
         "ER-TKT-001",

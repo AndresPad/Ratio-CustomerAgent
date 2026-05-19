@@ -86,6 +86,10 @@ _load_agent_log_config()
 _current_xcv: ContextVar[str | None] = ContextVar(
     "current_xcv", default=None
 )
+# ── Context variable for the customer being processed ────────────────────────
+_current_customer_name: ContextVar[str | None] = ContextVar(
+    "current_customer_name", default=None
+)
 # ── Context variable for the service being evaluated / investigated ───────
 _current_service_tree_id: ContextVar[str | None] = ContextVar(
     "current_service_tree_id", default=None
@@ -116,6 +120,16 @@ def get_current_xcv() -> str | None:
 def set_current_xcv(xcv: str) -> None:
     """Bind an XCV to the current async context."""
     _current_xcv.set(xcv)
+
+
+def get_current_customer_name() -> str | None:
+    """Return the customer_name bound to the current async context."""
+    return _current_customer_name.get()
+
+
+def set_current_customer_name(customer_name: str | None) -> None:
+    """Bind a customer_name to the current async context."""
+    _current_customer_name.set(customer_name)
 
 
 def get_current_service_tree_id() -> str | None:

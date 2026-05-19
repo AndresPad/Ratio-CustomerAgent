@@ -8,6 +8,10 @@
     "db348eb2-16db-44b3-b867-f60f7cfb87d4": {
       "name": "SQL Connectivity",
       "dependencies": ["sql_availability", "sql_control_plane"]
+    },
+    "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0": {
+      "name": "Azure Kubernetes Service",
+      "dependencies": []
     }
   }
 }

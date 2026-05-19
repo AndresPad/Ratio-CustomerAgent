@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Start all services for local development.
 
@@ -25,7 +25,6 @@ param(
 $ErrorActionPreference = "SilentlyContinue"
 $ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $VENV = Join-Path $ROOT ".venv\Scripts\Activate.ps1"
-$PYEXE = Join-Path $ROOT ".venv\Scripts\python.exe"
 
 # ── Colors ──
 function Write-Header($msg) { Write-Host "`n━━━ $msg ━━━" -ForegroundColor Cyan }
@@ -49,7 +48,7 @@ foreach ($svc in $ports) {
         }
         Write-Ok "Stopped $($svc.Name) (port $($svc.Port))"
     } else {
-        Write-Ok "$($svc.Name) - not running"
+        Write-Ok "$($svc.Name) — not running"
     }
 }
 
@@ -67,28 +66,39 @@ $jobs = @()
 
 # 0. RATIO MCP server (port 8000)
 $jobs += Start-Job -Name "ratio-mcp" -ScriptBlock {
-    param($root, $pyexe)
+    param($root, $venv)
     Set-Location (Join-Path $root "Code\RATIO_MCP\src")
+    & $venv
     $env:PYTHONPATH = (Join-Path $root "Code\RATIO_MCP\src")
-    & $pyexe server.py 2>&1
-} -ArgumentList $ROOT, $PYEXE
-Write-Ok "ratio-mcp -> http://127.0.0.1:8000"
+    python server.py 2>&1
+} -ArgumentList $ROOT, $VENV
+Write-Ok "ratio-mcp → http://127.0.0.1:8000"
 
 # 1. CustomerAgent server (port 8503)
 $jobs += Start-Job -Name "customer-agent" -ScriptBlock {
-    param($root, $pyexe)
+    param($root, $venv)
     Set-Location (Join-Path $root "Code\CustomerAgent\src")
+    & $venv
     $env:PYTHONPATH = (Join-Path $root "Code\CustomerAgent\src")
-    & $pyexe -m uvicorn server.app:app --host 127.0.0.1 --port 8503 2>&1
-} -ArgumentList $ROOT, $PYEXE
+    $env:PUBLISHER_COSMOS_ENDPOINT = "https://cosmos-ratio-ai-dev.documents.azure.com:443/"
+    $env:PUBLISHER_COSMOS_DATABASE = "customeragentdb"
+    $env:PUBLISHER_COSMOS_CONTAINER = "customer_agent"
+    # Log Analytics deep-link (Open Logs button on History page)
+    $env:LOG_ANALYTICS_WORKSPACE_ID = "321fc84a-8346-40f4-acf6-a505a7f7dd90"
+    $env:LOG_ANALYTICS_WORKSPACE_NAME = "log-ratioai-dev"
+    $env:LOG_ANALYTICS_SUBSCRIPTION_ID = "01819f01-7af1-4dd8-9354-9dccc163ceae"
+    $env:LOG_ANALYTICS_RESOURCE_GROUP = "rg-ratio-ai-dev"
+    python -m uvicorn server.app:app --host 127.0.0.1 --port 8503 2>&1
+} -ArgumentList $ROOT, $VENV
 Write-Ok "customer-agent → http://127.0.0.1:8503"
 
 # 2. CustomerAgent UI server (port 5020)
 $jobs += Start-Job -Name "customer-agent-ui" -ScriptBlock {
-    param($root, $pyexe)
+    param($root, $venv)
     Set-Location (Join-Path $root "Code\CustomerAgent\CustomerAgentUI")
-    & $pyexe server.py 2>&1
-} -ArgumentList $ROOT, $PYEXE
+    & $venv
+    python server.py 2>&1
+} -ArgumentList $ROOT, $VENV
 Write-Ok "customer-agent-ui → http://127.0.0.1:5020"
 
 # 3. React UI — Vite dev server (port 3010)
@@ -98,7 +108,7 @@ if (-not $SkipFrontend) {
         Set-Location (Join-Path $root "Code\CustomerAgent\ratio_ui_web")
         npm run dev 2>&1
     } -ArgumentList $ROOT
-    Write-Ok "ratio-ui-web -> http://127.0.0.1:3010"
+    Write-Ok "ratio-ui-web → http://127.0.0.1:3010"
 } else {
     Write-Skip "ratio-ui-web"
 }
@@ -108,9 +118,9 @@ Write-Header "Waiting for services to be ready"
 Start-Sleep -Seconds 6
 
 $healthChecks = @(
-    @{ Url="http://127.0.0.1:8000/health"; Name="ratio-mcp"; Retries=20 },
-    @{ Url="http://127.0.0.1:8503/health"; Name="customer-agent"; Retries=10 },
-    @{ Url="http://127.0.0.1:5020"; Name="customer-agent-ui"; Retries=10 }
+    @{ Url="http://127.0.0.1:8000/health"; Name="ratio-mcp"; Retries=45 },
+    @{ Url="http://127.0.0.1:8503/health"; Name="customer-agent"; Retries=45 },
+    @{ Url="http://127.0.0.1:5020"; Name="customer-agent-ui"; Retries=15 }
 )
 foreach ($hc in $healthChecks) {
     $ok = $false
@@ -144,6 +154,7 @@ Write-Host "  Press Ctrl+C to stop all services" -ForegroundColor DarkGray
 Write-Host ""
 
 # ── Tail logs (keep script alive) ──
+$reportedExited = @{}
 try {
     while ($true) {
         foreach ($j in $jobs) {
@@ -153,9 +164,10 @@ try {
                     Write-Host "[$($j.Name)] $line" -ForegroundColor DarkGray
                 }
             }
-            if ($j.State -eq 'Failed' -or $j.State -eq 'Completed') {
+            if (($j.State -eq 'Failed' -or $j.State -eq 'Completed') -and -not $reportedExited.ContainsKey($j.Name)) {
                 Write-Err "$($j.Name) exited ($($j.State))"
                 Receive-Job -Job $j -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+                $reportedExited[$j.Name] = $true
             }
         }
         Start-Sleep -Seconds 3

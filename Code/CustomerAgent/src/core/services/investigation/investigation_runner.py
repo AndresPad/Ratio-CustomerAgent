@@ -54,7 +54,7 @@ from .hypothesis_scorer import score_hypotheses
 from .investigation_narrator import narrate_agent_turn, narrate_stage
 from .investigation_folding_strategy import InvestigationFoldingStrategy, FOLDING_ENABLED
 from core.sandbox.fetch_tools import clear_fetch_cache
-from helper.agent_logger import AgentLogger, get_current_xcv, set_current_xcv, set_current_tool_stage, generate_xcv, set_current_service_tree_id
+from helper.agent_logger import AgentLogger, get_current_xcv, set_current_xcv, set_current_tool_stage, generate_xcv, set_current_service_tree_id, set_current_customer_name
 
 logger = logging.getLogger(__name__)
 
@@ -178,15 +178,22 @@ def _enrich_fallback_symptoms(
 
 # ── Deterministic symptom coverage enforcement ───────────────────────────────
 
-def _evaluate_filters(filters: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+def _evaluate_filters(
+    filters: dict[str, Any],
+    rows: list[dict[str, Any]],
+    target_customer: str | None = None,
+) -> bool:
     """Evaluate a template's filters against signal data rows.
 
     Supported filter patterns (all must pass for the template to match):
-      - min_row_count: N          → len(rows) >= N
-      - min_<field>: N            → any row has numeric field >= N
-      - max_<field>: N            → any row has numeric field <= N
-      - is_<field>: true          → any row has truthy field value
-      - <field>_present: true     → any row has non-empty string field
+      - min_row_count: N                       → len(rows) >= N
+      - min_<field>: N                         → any row has numeric field >= N
+      - max_<field>: N                         → any row has numeric field <= N
+      - is_<field>: true                       → any row has truthy field value
+      - <field>_present: true                  → any row has non-empty string field
+      - customer_name_equals_target: true      → any row's customer_name matches the
+        investigation's target customer (case-insensitive). Prevents single-case
+        symptoms confirming on cases filed by other customers in multi-customer signals.
 
     Returns True if ALL filter conditions are satisfied.
     """
@@ -194,6 +201,22 @@ def _evaluate_filters(filters: dict[str, Any], rows: list[dict[str, Any]]) -> bo
         return False  # No filters = not deterministically confirmable
 
     for key, threshold in filters.items():
+        # customer_name_equals_target: any row whose customer_name matches the target
+        if key == "customer_name_equals_target" and threshold is True:
+            if not target_customer:
+                return False
+            t = target_customer.strip().lower()
+            def _row_customer(r: dict[str, Any]) -> str:
+                return str(
+                    r.get("customer_name")
+                    or r.get("Customer_CloudCustomerName")
+                    or r.get("CustomerName")
+                    or ""
+                ).strip().lower()
+            if not any(_row_customer(r) == t for r in rows):
+                return False
+            continue
+
         # min_row_count: special — checks total row count, not per-row field
         if key == "min_row_count":
             if len(rows) < threshold:
@@ -361,7 +384,8 @@ def _ensure_signal_type_coverage(
             max_strength = max(max_strength, strength)
 
         # Evaluate filters against the actual data
-        if not _evaluate_filters(filters, all_rows):
+        target_customer = getattr(signal_builder_result, "customer_name", None)
+        if not _evaluate_filters(filters, all_rows, target_customer=target_customer):
             continue
 
         logger.info(
@@ -764,6 +788,24 @@ async def run_investigation(
     inv_workflow_cfg = config.get("investigation_workflow")
     if not inv_workflow_cfg:
         logger.error("No 'investigation_workflow' section in agents_config.json")
+        # No investigation state yet — inline publish so the Interpreter's
+        # correlator still gets a terminal outcome and can flush its window.
+        try:
+            from core.services.publisher.outcome_publisher import publish_outcome
+            _early_xcv = (getattr(result, "xcv", "") or generate_xcv())
+            asyncio.ensure_future(publish_outcome(
+                customer_name=result.customer_name,
+                xcv=_early_xcv,
+                investigation=None,
+                status="error",
+                reason="missing_investigation_workflow_config",
+                service_tree_id=result.service_tree_id,
+                service_name=result.service_name,
+                investigation_id=_early_xcv,
+                phase="runner_init",
+            ))
+        except Exception:
+            logger.exception("Failed to publish error outcome (missing config)")
         return
 
     # Create investigation state
@@ -808,9 +850,31 @@ async def run_investigation(
     )
     set_current_xcv(xcv)
     set_current_service_tree_id(result.service_tree_id)
+    set_current_customer_name(result.customer_name)
     clear_fetch_cache()  # Reset dedup cache for new investigation
     investigation.context.extra["xcv"] = xcv
     tracker = AgentLogger.get_instance()
+
+    # ── Terminal outcome helper ────────────────────────────────
+    # Publish a terminal outcome to Blob/Cosmos/Service Bus so the
+    # Interpreter's correlator can flush its window without waiting
+    # max_wait_minutes for this service. Fire-and-forget; failures must
+    # not mask the original error path.
+    def _publish_terminal(status: str, reason: str) -> None:
+        try:
+            from core.services.publisher.outcome_publisher import publish_outcome
+            asyncio.ensure_future(publish_outcome(
+                customer_name=result.customer_name or "unknown",
+                xcv=xcv,
+                investigation=investigation,
+                status=status,
+                reason=reason,
+            ))
+        except Exception:
+            logger.exception(
+                "Failed to schedule terminal publish (status=%s reason=%s xcv=%s)",
+                status, reason, xcv,
+            )
     tracker.log_investigation_created(
         xcv=xcv,
         investigation_id=investigation.id,
@@ -858,6 +922,7 @@ async def run_investigation(
 
     if orchestrator_name not in all_agents_dict:
         logger.error("Investigation orchestrator '%s' not found in agents", orchestrator_name)
+        _publish_terminal("error", f"orchestrator_not_found:{orchestrator_name}")
         return
 
     orchestrator = all_agents_dict[orchestrator_name]
@@ -933,6 +998,7 @@ async def run_investigation(
             "phase": investigation.phase.value,
             "last_agent": "none",
         }
+        _publish_terminal("error", f"triage_agent_not_found:{triage_agent_name}")
         await _close_all_agents()
         return
 
@@ -963,6 +1029,7 @@ async def run_investigation(
                     "phase": investigation.phase.value,
                     "last_agent": triage_agent_name,
                 }
+                _publish_terminal("error", f"triage_timeout_after_{_TRIAGE_MAX_RETRIES}_attempts")
                 await _close_all_agents()
                 return
             tracker.log_agent_retry(
@@ -989,6 +1056,7 @@ async def run_investigation(
                     "phase": investigation.phase.value,
                     "last_agent": triage_agent_name,
                 }
+                _publish_terminal("error", f"triage_failed_{type(classified).__name__}")
                 await _close_all_agents()
                 return
             if attempt == _TRIAGE_MAX_RETRIES:
@@ -1000,6 +1068,7 @@ async def run_investigation(
                     "phase": investigation.phase.value,
                     "last_agent": triage_agent_name,
                 }
+                _publish_terminal("error", f"triage_failed_after_{_TRIAGE_MAX_RETRIES}_attempts_{type(classified).__name__}")
                 await _close_all_agents()
                 return
             tracker.log_agent_retry(
@@ -1190,6 +1259,12 @@ async def run_investigation(
             "phase": investigation.phase.value,
             "last_agent": triage_agent_name,
         }
+        # Publish a terminal "no_hypotheses" outcome so the Interpreter's
+        # correlator can flush its window without waiting max_wait_minutes.
+        _publish_terminal(
+            "no_hypotheses",
+            f"triage_produced_{len(investigation.symptoms)}_symptoms_0_hypotheses",
+        )
         await _close_all_agents()
         return
 
@@ -2148,6 +2223,7 @@ async def run_investigation(
             "phase": investigation.phase.value,
             "last_agent": current_agent or "unknown",
         }
+        _publish_terminal("error", f"workflow_failed_{type(classified).__name__}")
         if not feeder_task.done():
             feeder_task.cancel()
         await _close_all_agents()
@@ -2219,6 +2295,7 @@ async def run_investigation(
             "investigation_id": investigation.id,
             "error": warning,
         }
+        _publish_terminal("error", "workflow_zero_agent_responses")
         await _close_all_agents()
         return
 
@@ -2479,6 +2556,39 @@ async def run_investigation(
             len(confirmed), len(contributing),
             sum(1 for h in investigation.hypotheses if h.status == HypothesisStatus.REFUTED),
         )
+
+    # ── Publish outcome (fire-and-forget, non-blocking) ────────────────────
+    try:
+        from core.services.publisher.outcome_publisher import publish_outcome
+        from helper.agent_logger import get_current_customer_name
+
+        _pub_customer = get_current_customer_name() or "unknown"
+        _pub_task = asyncio.ensure_future(publish_outcome(
+            customer_name=_pub_customer,
+            xcv=xcv,
+            investigation=investigation,
+            # activated_signals/compounds derived from
+            # investigation.signal_builder_result inside publish_outcome.
+            status="completed",
+            reason="",
+        ))
+
+        def _pub_done(t: "asyncio.Task") -> None:
+            try:
+                exc = t.exception()
+            except asyncio.CancelledError:
+                logger.warning("Outcome publisher task cancelled for %s", xcv)
+                return
+            if exc:
+                logger.error(
+                    "Outcome publisher task raised for %s: %s: %s",
+                    xcv, type(exc).__name__, exc,
+                    exc_info=exc,
+                )
+
+        _pub_task.add_done_callback(_pub_done)
+    except Exception as _pub_exc:
+        logger.warning("Outcome publisher failed to enqueue: %s", _pub_exc)
 
     # Mark complete
     if investigation.phase != InvestigationPhase.COMPLETE:

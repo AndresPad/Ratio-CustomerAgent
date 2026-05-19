@@ -33,7 +33,8 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Default backend URLs (overridden via env vars in Azure)
 ENV BACKEND_AGENTS_URL=http://ratio-agents:8000 \
     BACKEND_SR_INSIGHTS_URL=http://ratio-sr-insights:8006 \
-    BACKEND_FUSE_URL=http://ratio-fuse:8008
+    BACKEND_FUSE_URL=http://ratio-fuse:8008 \
+    BACKEND_CUSTOMERAGENT_URL=http://ratio-customeragent:8503
 
 # Use non-root user
 RUN chown -R nginx:nginx /usr/share/nginx/html && \
@@ -43,7 +44,7 @@ RUN chown -R nginx:nginx /usr/share/nginx/html && \
     chown -R nginx:nginx /var/run/nginx.pid
 
 # Create entrypoint script that renders the template then starts nginx
-RUN printf '#!/bin/sh\nenvsubst "\$BACKEND_AGENTS_URL \$BACKEND_SR_INSIGHTS_URL \$BACKEND_FUSE_URL" < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf\nexec nginx -g "daemon off;"\n' > /docker-entrypoint.sh && \
+RUN printf '#!/bin/sh\nenvsubst "\$BACKEND_AGENTS_URL \$BACKEND_SR_INSIGHTS_URL \$BACKEND_FUSE_URL \$BACKEND_CUSTOMERAGENT_URL" < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf\nexec nginx -g "daemon off;"\n' > /docker-entrypoint.sh && \
     chmod +x /docker-entrypoint.sh
 
 USER nginx

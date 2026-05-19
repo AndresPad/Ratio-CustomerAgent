@@ -1,0 +1,34 @@
+{
+  "agents": [
+    {
+      "name": "correlator",
+      "description": "Analyzes buffered investigation outcomes and identifies correlations across investigations using sandbox Python execution for time-series analysis.",
+      "prompt_file": "correlator_prompt.txt",
+      "model": "gpt-4o",
+      "temperature": 0.1,
+      "tool_mode": "sandbox",
+      "mcp_tools": [],
+      "evaluate": false,
+      "prompt_injection": false,
+      "log_input": true,
+      "log_output": true,
+      "response_format": "json_object",
+      "max_completion_tokens": 8192
+    },
+    {
+      "name": "action_composer",
+      "description": "Composes unified, prioritized action plans from correlated investigation outcomes.",
+      "prompt_file": "action_composer_prompt.txt",
+      "model": "gpt-4o",
+      "temperature": 0.1,
+      "tool_mode": "sandbox",
+      "mcp_tools": [],
+      "evaluate": false,
+      "prompt_injection": false,
+      "log_input": true,
+      "log_output": true,
+      "response_format": "json_object",
+      "max_completion_tokens": 8192
+    }
+  ]
+}

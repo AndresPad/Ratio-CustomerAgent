@@ -1,7 +1,7 @@
 declare query_parameters (startTime:datetime, endTime:datetime, supportProductNames:string = "[]");
 let _productNames = todynamic(supportProductNames);
 let _effectiveStart = iif((endTime - startTime) < 6h, startTime - 4h, startTime);
-let _effectiveEnd = iif((endTime - startTime) < 6h, startTime + 4h, endTime);
+let _effectiveEnd = endTime; //iif((endTime - startTime) < 6h, startTime + 4h, endTime);
 cluster('https://supportrptwus3prod.westus3.kusto.windows.net').database('Product360M365').AllCloudsSupportIncidentWithReferenceModelVNext_AllSources 
 | join kind=leftouter 
     ( cluster('supportrptwus3prod.westus3.kusto.windows.net').database('AceHubSupportData').

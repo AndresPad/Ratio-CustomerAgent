@@ -94,8 +94,12 @@ def _load_monitoring_scenarios() -> list[dict]:
         return scenarios
     ctx = _load_json(ctx_path)
     for t_idx, target in enumerate(ctx.get("targets", []) or []):
+        if target.get("enabled", True) is False:
+            continue
         cust = target.get("customer_name", "")
         for s_idx, svc in enumerate(target.get("service_tree_ids", []) or []):
+            if isinstance(svc, dict) and svc.get("enabled", True) is False:
+                continue
             scenarios.append({
                 "id": f"SC-LIVE-{t_idx+1}-{s_idx+1}",
                 "name": f"Live health sweep — {cust} / {svc.get('name') or svc.get('id','')}",

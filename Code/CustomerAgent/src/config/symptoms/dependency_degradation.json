@@ -6,10 +6,10 @@
       "signal_sources": ["SIG-TYPE-4"],
       "granularity": "dep_region_sli",
       "weight": 2,
-      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has SLI category '{sli_category}' breached in region '{region}' — a region where the primary customer has resources. {impacted_subscriptions} subscriptions and {impacted_resources} resources affected over {total_impact_duration_min} min. Avg value: {avg_value_across_windows}%. This is a leading indicator of potential customer impact.",
+      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has SLI category '{sli_category}' breached in region '{region}' — a region where the primary customer has resources. {impacted_subscriptions} subscriptions and {impacted_resources} resources affected over {total_impact_duration_min} min. Avg value: {avg_value_across_windows}%. This is a leading indicator of potential customer impact. Observed symptoms: {symptoms}.",
       "extracted_when": "Dependency service SLI breached in a region where the customer has resources — leading indicator of potential cascade to primary service.",
       "fields": {
-        "from_data": ["dependency_service_name", "dependency_category", "region", "sli_category", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows"]
+        "from_data": ["dependency_service_name", "dependency_category", "region", "sli_category", "impacted_resources", "impacted_subscriptions", "total_impact_duration_min", "avg_value_across_windows", "min_value_across_windows", "symptoms"]
       },
       "filters": {
         "min_impacted_resources": 10
@@ -25,10 +25,10 @@
       "signal_sources": ["SIG-TYPE-4"],
       "granularity": "dep_cross_region_sli",
       "weight": 3,
-      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has SLI category '{sli_category}' breached across {region_count} regions [{region_list}]. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Avg value: {avg_value_across_windows}%. A single SLI breached in multiple customer regions indicates a widespread dependency issue — not isolated to one region.",
+      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has SLI category '{sli_category}' breached across {region_count} regions [{region_list}]. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Avg value: {avg_value_across_windows}%. A single SLI breached in multiple customer regions indicates a widespread dependency issue — not isolated to one region. Observed symptoms: {symptoms}.",
       "extracted_when": "Same dependency SLI breached in 2+ customer regions — widespread dependency failure, not isolated to one region.",
       "fields": {
-        "from_data": ["dependency_service_name", "dependency_category", "sli_category", "region_list", "region_count", "total_impacted_resources", "total_impacted_subscriptions", "avg_value_across_windows"]
+        "from_data": ["dependency_service_name", "dependency_category", "sli_category", "region_list", "region_count", "total_impacted_resources", "total_impacted_subscriptions", "avg_value_across_windows", "symptoms"]
       },
       "filters": {
         "min_region_count": 2
@@ -44,10 +44,10 @@
       "signal_sources": ["SIG-TYPE-4"],
       "granularity": "dep_multi_sli_region",
       "weight": 3,
-      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has {distinct_sli_count} distinct SLIs breached in regions [{region_list}]. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Avg value: {avg_value_across_windows}%. Multiple SLI breaches indicate broad service-level degradation — elevated spill-over risk for the primary customer.",
+      "template": "Dependency service '{dependency_service_name}' (category: {dependency_category}) has {distinct_sli_count} distinct SLIs breached in regions [{region_list}]. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Avg value: {avg_value_across_windows}%. Multiple SLI breaches indicate broad service-level degradation — elevated spill-over risk for the primary customer. Observed symptoms: {symptoms}.",
       "extracted_when": "Multiple distinct SLIs from the same dependency service are breached in the same customer region, indicating broad dependency service degradation.",
       "fields": {
-        "from_data": ["dependency_service_name", "dependency_category", "region_list", "distinct_sli_count", "total_impacted_resources", "total_impacted_subscriptions", "avg_value_across_windows"]
+        "from_data": ["dependency_service_name", "dependency_category", "region_list", "distinct_sli_count", "total_impacted_resources", "total_impacted_subscriptions", "avg_value_across_windows", "symptoms"]
       },
       "filters": {
         "min_distinct_sli_count": 2
@@ -59,10 +59,10 @@
       "signal_sources": ["SIG-TYPE-4"],
       "granularity": "dep_multi_service_region",
       "weight": 3,
-      "template": "Regions [{region_list}] have {distinct_dep_count} dependency services degraded with {distinct_sli_count} SLIs breached. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Multiple dependency services failing in the same customer regions indicates a broad regional platform issue — resource exhaustion, infrastructure failure, or cascading dependency chain.",
+      "template": "Regions [{region_list}] have {distinct_dep_count} dependency services degraded with {distinct_sli_count} SLIs breached. {total_impacted_subscriptions} subscriptions, {total_impacted_resources} resources affected. Multiple dependency services failing in the same customer regions indicates a broad regional platform issue — resource exhaustion, infrastructure failure, or cascading dependency chain. Observed symptoms: {symptoms}.",
       "extracted_when": "Two or more distinct dependency services show SLI breaches in the same customer region — the strongest dependency signal indicating regional platform stress.",
       "fields": {
-        "from_data": ["region_list", "distinct_dep_count", "distinct_sli_count", "total_impacted_resources", "total_impacted_subscriptions"]
+        "from_data": ["region_list", "distinct_dep_count", "distinct_sli_count", "total_impacted_resources", "total_impacted_subscriptions", "symptoms"]
       },
       "filters": {
         "min_distinct_dep_count": 2

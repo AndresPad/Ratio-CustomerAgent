@@ -57,6 +57,7 @@ def connect(
     user_token: str | None = None,
     endpoint: str | None = None,
     database: str | None = None,
+    app_id: str | None = None,
 ) -> pyodbc.Connection:
     """Connect to a SQL endpoint with flexible auth.
 
@@ -64,6 +65,10 @@ def connect(
         user_token: Optional bearer token from the API caller.
         endpoint: SQL server hostname override (defaults to FABRIC_SQL_ENDPOINT).
         database: Database name override (defaults to FABRIC_SQL_DATABASE).
+        app_id: Optional service-principal client ID used for the
+            CertificateCredential fallback. Defaults to FABRIC_APP_ID.
+            Pass a Synapse-specific SP here so Synapse endpoints don't
+            piggy-back on the Fabric identity.
 
     Resolution order:
       1. user_token — if a bearer token is passed from the API caller, use it directly.
@@ -80,9 +85,13 @@ def connect(
         except Exception as e:
             logger.warning("SQL auth user token failed: %s; falling through", e)
 
-    # 2. MI → Default → Cert (via centralized auth)
+    # 2. MI → Default → Cert (via centralized auth).
+    # The cert fallback uses *app_id* if supplied (e.g. a Synapse-specific SP),
+    # otherwise the Fabric SP. Scope https://database.windows.net/.default is
+    # correct for Azure SQL DB, Fabric SQL, and Synapse SQL (serverless + dedicated).
+    cert_app_id = app_id or FABRIC_APP_ID
     try:
-        token = get_token(_SQL_SCOPE, cert_client_id=FABRIC_APP_ID)
+        token = get_token(_SQL_SCOPE, cert_client_id=cert_app_id)
         return _connect_with_token(token, endpoint=endpoint, database=database)
     except ConnectionError:
         raise ConnectionError(
@@ -97,6 +106,7 @@ def run_tsql_query(
     user_token: str | None = None,
     endpoint: str | None = None,
     database: str | None = None,
+    app_id: str | None = None,
 ) -> list:
     """Execute a T-SQL query with flexible auth.
 
@@ -105,8 +115,9 @@ def run_tsql_query(
         user_token: Optional bearer token from the API caller for passthrough auth.
         endpoint: SQL server hostname override (defaults to FABRIC_SQL_ENDPOINT).
         database: Database name override (defaults to FABRIC_SQL_DATABASE).
+        app_id: Optional SP client ID for the cert fallback (per-endpoint identity).
     """
-    conn = connect(user_token=user_token, endpoint=endpoint, database=database)
+    conn = connect(user_token=user_token, endpoint=endpoint, database=database, app_id=app_id)
     cursor = conn.cursor()
     try:
         logger.debug("Executing query: %s", query[:200])

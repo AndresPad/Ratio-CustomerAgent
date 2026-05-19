@@ -12,7 +12,9 @@
         "from_data": ["case_number", "title", "state", "is_crit_sit", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"]
       },
       "filters": {
-        "min_row_count": 1
+        "min_row_count": 1,
+        "case_number_present": true,
+        "customer_name_equals_target": true
       },
       "suppress_when": {
         "granularity_activated": "multi_case_same_product",
@@ -31,7 +33,8 @@
         "from_data": ["case_numbers", "case_count", "state", "support_product_name", "region", "earliest_case_date", "azure_subscription_id", "customer_name"]
       },
       "filters": {
-        "is_crit_sit": true
+        "is_crit_sit": true,
+        "case_number_present": true
       }
     },
     {
@@ -46,7 +49,8 @@
         "from_data": ["case_number", "title", "state", "support_product_name", "region", "created_date_time", "is_escalated", "initial_severity", "severity", "azure_subscription_id", "customer_name"]
       },
       "filters": {
-        "is_escalated": true
+        "is_escalated": true,
+        "case_number_present": true
       }
     },
     {
@@ -61,7 +65,8 @@
         "from_data": ["support_product_name", "case_count", "max_severity", "customer_name"]
       },
       "filters": {
-        "min_case_count": 2
+        "min_case_count": 2,
+        "case_number_present": true
       }
     },
     {
@@ -76,7 +81,7 @@
         "from_data": ["support_product_name", "total_case_count", "distinct_customer_count", "max_severity", "crit_sit_count", "customer_list", "region_list", "case_numbers", "earliest_case", "latest_case"]
       },
       "filters": {
-        "min_distinct_customers": 2
+        "min_distinct_customer_count": 2
       }
     },
     {
@@ -92,7 +97,7 @@
       },
       "filters": {
         "is_crit_sit": true,
-        "min_distinct_crit_sit_customers": 2
+        "min_distinct_crit_sit_customer_count": 2
       }
     }
   ]

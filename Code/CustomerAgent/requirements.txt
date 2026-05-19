@@ -20,6 +20,14 @@ uvicorn[standard]>=0.30.0
 # Azure Key Vault (cert for SSO)
 azure-keyvault-secrets>=4.8.0
 
+# Azure Data Lake Storage Gen2 (sandbox evidence storage)
+azure-storage-file-datalake>=12.14.0
+
+# Outcome publisher: Cosmos DB (SQL API) + Service Bus
+azure-cosmos>=4.7.0
+azure-servicebus>=7.12.0
+aiohttp>=3.9.0  # required by azure-cosmos.aio
+
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.0.0

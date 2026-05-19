@@ -59,10 +59,10 @@ def _tool_mode_all(agent_cfg: dict[str, Any], ctx: dict[str, Any]) -> list:
 def _tool_mode_sandbox(agent_cfg: dict[str, Any], ctx: dict[str, Any]) -> list:
     from core.sandbox.tools import (
         execute_python_in_sandbox,
-        download_sandbox_file,
         list_sandbox_files,
+        read_sandbox_manifest,
     )
-    return [execute_python_in_sandbox, download_sandbox_file, list_sandbox_files]
+    return [execute_python_in_sandbox, list_sandbox_files, read_sandbox_manifest]
 
 
 def _tool_mode_fetch_tools(agent_cfg: dict[str, Any], ctx: dict[str, Any]) -> list:

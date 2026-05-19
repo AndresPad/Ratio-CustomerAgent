@@ -1,5 +1,5 @@
 {
-  "output_base": "/mnt/data/{xcv}",
+  "output_base": "{ADLS_BASE_PATH}/{xcv}",
   "subdirs": {
     "evidence": "evidence",
     "analysis": "analysis"
@@ -11,12 +11,29 @@
         {
           "tool": "collect_impacted_resource_customer_tool",
           "output_file": "sli_customer.json",
-          "params": ["service_tree_id", "customer_name", "start_time", "end_time"]
+          "er_id": "ER-SLI-001",
+          "params": ["service_tree_id", "customer_name", "start_time", "end_time"],
+          "path_scope": "service_tree_id"
         },
         {
           "tool": "collect_impacted_resource_multicustomer_tool",
           "output_file": "sli_multicustomer.json",
-          "params": ["service_tree_id", "start_time", "end_time"]
+          "er_id": "ER-SLI-002",
+          "params": ["service_tree_id", "start_time", "end_time"],
+          "path_scope": "service_tree_id"
+        }
+      ]
+    },
+    "fetch_dependency_sli_data": {
+      "er_patterns": ["ER-DEP-*"],
+      "iterate_dependencies": true,
+      "mcp_calls": [
+        {
+          "tool": "collect_impacted_resource_multicustomer_tool",
+          "output_file": "sli_multicustomer.json",
+          "er_id": "ER-DEP-002",
+          "params": ["service_tree_id", "start_time", "end_time"],
+          "path_scope": "service_tree_id"
         }
       ]
     },
@@ -26,6 +43,7 @@
         {
           "tool": "collect_incident_details_tool",
           "output_file": "incidents.json",
+          "er_id": "ER-OUT-001",
           "params": ["start_time", "end_time", "owning_tenant_names?"]
         }
       ]
@@ -36,11 +54,13 @@
         {
           "tool": "collect_support_request_tool",
           "output_file": "support_customer.json",
+          "er_id": "ER-TKT-001",
           "params": ["customer_name", "start_time", "end_time", "support_product_names?"]
         },
         {
           "tool": "collect_support_request_multicustomer_tool",
           "output_file": "support_multicustomer.json",
+          "er_id": "ER-TKT-002",
           "params": ["start_time", "end_time", "support_product_names?"]
         }
       ]

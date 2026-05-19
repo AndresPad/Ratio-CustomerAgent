@@ -2,7 +2,8 @@ declare query_parameters (serviceTreeId:string, customerName:string, startTime:d
 // Clamp window to max 1 hour to avoid resource-exhaustion on large datasets
 let effectiveEndTime = iff((endTime - startTime) > 1h, startTime + 1h, endTime);
 let SliCategory = cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').ServiceSliCategories
-| project ServiceTreeId, SliId, SliCategory
+| where ServiceTreeId == serviceTreeId
+| project SliId, SliCategory, tostring(Symptoms)
 ;
 let tableSLIMapping =
 cluster('bdsair.centralus.kusto.windows.net').database('Airogreen').external_table('External_SliIdToSliTableMapping')
@@ -20,8 +21,7 @@ let subscriptionList =
 let ImpactedResource =
     tableSLIMapping
     | where ServiceTreeId ==  serviceTreeId//'734379f9-2d2c-48d4-a52a-5c509f699de4'
-    | join kind=leftouter SliCategory on $left.SliId == $right.SliId and $left.ServiceTreeId == $right.ServiceTreeId
-    | project SliTableName, Target, SliCategory
+    | project SliTableName, Target
     | order by SliTableName asc
     | extend formatted = strcat('(cluster("bdssli.westcentralus").database("slidata").["', SliTableName, '"]',
         " | where EndTimeUtc >= datetime(", format_datetime(startTime, 'yyyy-MM-dd HH:mm:ss'), ")",
@@ -70,7 +70,7 @@ let resourceImpacts =
         ImpactDurationMin = datetime_diff('minute', max(EndTimeUtc), min(StartTimeUtc)),
         AvgValue = avg(Value),
         MinValue = min(Value)
-        by CustomerResourceId, CustomerName, SLO_SliId, SliCategory, Region, Tenant, IslandId
+        by CustomerResourceId, CustomerName, SLO_SliId, Region, IslandId
     | project-away IslandId
 ;
 // Step 4: Extract SubscriptionId and summarize per subscription
@@ -84,5 +84,7 @@ resourceImpacts
     AvgValueAcrossWindows = avg(AvgValue),
     MinValueAcrossWindows = min(MinValue)
     // ImpactWindows = count()
-    by CustomerName, SubscriptionId, Region, SLO_SliId, SliCategory
+    by CustomerName, SubscriptionId, Region, SLO_SliId
 | order by TotalImpactDurationMin desc
+| join kind=leftouter (SliCategory) on $left.SLO_SliId == $right.SliId
+| project-away SliId

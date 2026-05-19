@@ -15,7 +15,15 @@ from core.models.investigation.evidence_item import EvidenceItemModel
 from core.models.investigation.evidence_requirement import EvidenceRequirementModel
 from core.models.investigation.investigation_context import InvestigationContextModel
 from core.models.investigation.stream_event import StreamEventModel
-from core.models.investigation.investigationModel import InvestigationModel
+from core.models.investigation.investigation import InvestigationModel
+from core.models.publisher.publisher_models import (
+    ActivatedSignal,
+    BlobManifest,
+    InvestigationNotification,
+    OutcomeDocument,
+    OutcomeHypothesis,
+    OutcomeNotification,
+)
 
 __all__ = [
     "InvestigationPhase",
@@ -33,4 +41,10 @@ __all__ = [
     "InvestigationContextModel",
     "StreamEventModel",
     "InvestigationModel",
+    "ActivatedSignal",
+    "BlobManifest",
+    "InvestigationNotification",
+    "OutcomeDocument",
+    "OutcomeHypothesis",
+    "OutcomeNotification",
 ]

@@ -97,6 +97,11 @@ def _resolve_template_vars(prompt_text: str) -> str:
             "{{FETCH_TOOLS_REFERENCE}}", _load_fetch_tools_reference()
         )
 
+    if "{{TECHNIQUE_LIBRARY}}" in prompt_text:
+        prompt_text = prompt_text.replace(
+            "{{TECHNIQUE_LIBRARY}}", _load_technique_library()
+        )
+
     return prompt_text
 
 
@@ -191,9 +196,13 @@ def _load_fetch_tools_reference() -> str:
                     all_params.append(clean)
         signature = f"{tool_name}({', '.join(all_params)})"
 
-        # Build output file list
+        # Build output file list (ADLS paths under the configured base path)
         evidence_subdir = data.get("subdirs", {}).get("evidence", "evidence")
-        output_files = [f"/mnt/data/{{xcv}}/{evidence_subdir}/{call['output_file']}" for call in mcp_calls]
+        adls_base = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
+        output_files = [
+            f"{adls_base}/{{xcv}}/{evidence_subdir}/{call['output_file']}"
+            for call in mcp_calls
+        ]
 
         lines.append(f"{idx}. {signature}")
         lines.append(f"   → Writes: {', '.join(output_files)}")
@@ -213,6 +222,108 @@ def _load_fetch_tools_reference() -> str:
         lines.extend(er_mapping_lines)
 
     logger.info("Injected FETCH_TOOLS_REFERENCE (%d tools)", len(fetch_tools))
+    return "\n".join(lines)
+
+
+def _load_technique_library() -> str:
+    """Load analysis techniques from analysis_strategies_config.json.
+
+    Builds a formatted technique library reference for the sandbox_coder prompt.
+    Each technique includes: name, applicable_when conditions, scoring thresholds,
+    and code snippet. Also appends composition_rules and selection logic.
+    """
+    config_path = os.path.join(_CONFIG_DIR, "sandbox", "analysis_strategies_config.json")
+    if not os.path.isfile(config_path):
+        logger.warning("Analysis strategies config not found: %s", config_path)
+        return "(analysis strategies config not found)"
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load analysis strategies config: %s", exc)
+        return "(analysis strategies config failed to load)"
+
+    techniques = data.get("techniques", {})
+    composition = data.get("composition_rules", {})
+
+    lines: list[str] = []
+    
+
+    for tech_id, tech in techniques.items():
+        lines.append("─" * 64)
+        lines.append(f"TECHNIQUE: {tech_id}")
+        lines.append("─" * 64)
+
+        # USE WHEN from applicable_when
+        applicable = tech.get("applicable_when", [])
+        if applicable:
+            lines.append(f"USE WHEN: {applicable[0]}")
+            for cond in applicable[1:]:
+                lines.append(f"          {cond}")
+
+        # DO NOT USE WHEN from not_applicable_when
+        applicable = tech.get("not_applicable_when", [])
+        if applicable:
+            lines.append(f"DO NOT USE WHEN: {applicable[0]}")
+            for cond in applicable[1:]:
+                lines.append(f"          {cond}")
+
+        # INPUTS
+        inputs = tech.get("inputs", {})
+        if inputs:
+            first_key = next(iter(inputs))
+            lines.append(f"INPUTS:   {first_key}: {inputs[first_key]}")
+
+        # OUTPUTS
+        outputs = tech.get("outputs", {})
+        if outputs:
+            lines.append(f"OUTPUTS:  {', '.join(outputs.keys())}")
+
+        # SCORING from confidence_mapping
+        mapping = tech.get("confidence_mapping", {})
+        if mapping:
+            scoring_parts = []
+            for condition, score in mapping.items():
+                scoring_parts.append(f"{condition}→{score}")
+            lines.append(f"SCORING:  {', '.join(scoring_parts[:3])}")
+            for chunk_start in range(3, len(scoring_parts), 3):
+                chunk = scoring_parts[chunk_start:chunk_start + 3]
+                lines.append(f"          {', '.join(chunk)}")
+
+        # FALLBACK
+        fallback = tech.get("small_sample_fallback")
+        if fallback:
+            lines.append(f"FALLBACK: {fallback}")
+
+        # CODE snippet
+        snippet = tech.get("example_snippet", "")
+        if snippet:
+            lines.append("PSEUDO CODE:")
+            for code_line in snippet.split("\n"):
+                lines.append(f"  {code_line}")
+
+        lines.append("")
+
+    # Append composition rules as TECHNIQUE SELECTION LOGIC
+    lines.append("═" * 65)
+    lines.append("TECHNIQUE SELECTION LOGIC")
+    lines.append("═" * 65)
+    lines.append("")
+    lines.append("For each loaded ER, consider both data shape and question relevance:")
+    lines.append("")
+    selection = composition.get("selection_logic", [])
+    for rule in selection:
+        lines.append(f"  {rule}")
+    lines.append("")
+    min_tech = composition.get("minimum_techniques", 2)
+    max_tech = composition.get("maximum_techniques", 5)
+    lines.append(f"Apply {min_tech}–{max_tech} techniques total. More is fine if the data supports it.")
+
+    logger.info(
+        "Injected TECHNIQUE_LIBRARY (%d techniques) from analysis_strategies_config.json",
+        len(techniques),
+    )
     return "\n".join(lines)
 
 

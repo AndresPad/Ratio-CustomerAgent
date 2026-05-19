@@ -1,0 +1,31 @@
+// VM-only: This query returns unplanned VM impact events for a specific customer's subscriptions,
+// reshaped to match the SIG-TYPE-1 (SLI) output schema so it flows through existing signal granularities.
+// It only covers Virtual Machine workloads via VMALENS_Support — not applicable to other resource types.
+// Mapping: RCALevel1 → SliCategory, RCALevel1/2/3 → Symptoms, VM event → ImpactedResources/Duration/Value.
+declare query_parameters (serviceTreeId:string, customerName:string, startTime:datetime, endTime:datetime);
+let _effectiveStart = iif((endTime - startTime) > 6h, endTime - 6h, startTime);
+let _effectiveEnd = endTime; //iif((endTime - startTime) < 6h, startTime + 4h, endTime);
+let subscriptionList =
+    cluster('icmanalytics.centralus.kusto.windows.net').database('Analytics').Dim_C360CustomerSubscriptions
+    | where MSCustomerName contains customerName
+    | distinct SubscriptionGuid, CustomerName = MSCustomerName;
+cluster('vmainsight').database('vmadb').VMALENS_Support
+| extend ServiceTreeId = "49c39e84-285c-45e1-9008-ac6b217161e2"
+| where ServiceTreeId == serviceTreeId
+| where StartTime between (_effectiveStart .. _effectiveEnd)
+| where Subscription in~ (subscriptionList)
+| where RCAEngineCategory == 'Unplanned'
+| join kind=inner (subscriptionList) on $left.Subscription == $right.SubscriptionGuid
+| extend ImpactDurationMin = datetime_diff('minute', EndTime, StartTime)
+| summarize
+    ImpactedResources = dcount(Subscription),
+    TotalImpactDurationMin = sum(ImpactDurationMin),
+    EarliestImpactStart = min(StartTime),
+    LatestImpactEnd = max(EndTime),
+    AvgValueAcrossWindows = todouble(0),
+    MinValueAcrossWindows = todouble(0)
+    by CustomerName, SubscriptionId = Subscription, Region,
+       SLO_SliId = strcat("VM_UNPLANNED_", RCALevel1),
+       SliCategory = RCALevel1,
+       Symptoms = strcat(RCALevel1, " > ", RCALevel2, " > ", RCALevel3)
+| order by TotalImpactDurationMin desc

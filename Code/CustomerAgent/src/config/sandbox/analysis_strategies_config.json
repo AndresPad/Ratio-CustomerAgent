@@ -1,0 +1,279 @@
+{
+  "version": "3.0",
+  "description": "Library of reusable analysis techniques. Each technique produces raw computed metrics — no confidence scores, no verdicts. The reasoner interprets the metrics.",
+
+  "techniques": {
+
+    "anomaly_detection": {
+      "name": "Anomaly Detection (Z-Score + Effect Size)",
+      "description": "Measures how far a numeric metric deviates from a known healthy baseline. Produces a severity score.",
+      "applicable_when": [
+        "Data contains a numeric metric column with a known healthy baseline (e.g., availability %, latency ms)",
+        "You need to quantify HOW degraded a metric is, not just IF it's degraded",
+        "Dataset has at least 1 row with a numeric measurement"
+      ],
+      "not_applicable_when": [
+        "Data is categorical or boolean only (e.g., incident status, CritSit flag)",
+        "No meaningful baseline exists for the metric"
+      ],
+      "python_libraries": ["numpy", "scipy.stats"],
+      "inputs": {
+        "values": "Array of observed metric values (e.g., AvgValueAcrossWindows)",
+        "baseline_mean": "Expected healthy mean (e.g., 99.5 for availability %)",
+        "baseline_std": "Expected healthy std dev (e.g., 0.5 for availability %)"
+      },
+      "outputs": {
+        "z_score": "Standard deviations from baseline (higher = more anomalous)",
+        "cohens_d": "Effect size — magnitude of deviation regardless of sample size",
+        "breach_ratio": "Fraction of observations below threshold"
+      },
+      "small_sample_fallback": "If row_count < 5, use simple threshold comparison (value < baseline - 2*std) instead of z-score. Cohen's d remains valid for any sample size.",
+      "example_snippet": "z_score = (baseline_mean - observed_mean) / baseline_std\ncohens_d = abs(baseline_mean - observed_mean) / baseline_std\nbreach_ratio = len(df[df[col] < threshold]) / len(df)"
+    },
+
+    "temporal_overlap": {
+      "name": "Temporal Overlap Analysis",
+      "description": "Measures time window overlap between two event sources. Determines if events are temporally correlated (co-occurring) or independent.",
+      "applicable_when": [
+        "Two datasets each have start/end timestamps (or at least a start timestamp)",
+        "You need to determine if events in source A occurred DURING or NEAR events in source B",
+        "Examples: SLI breach window vs. incident window, SR filing time vs. outage window"
+      ],
+      "not_applicable_when": [
+        "One or both datasets lack timestamp columns",
+        "Events are instantaneous (no duration) — use proximity_scoring instead"
+      ],
+      "python_libraries": ["pandas"],
+      "inputs": {
+        "window_a": "(start_time, end_time) from first event source",
+        "window_b": "(start_time, end_time) from second event source"
+      },
+      "outputs": {
+        "overlap_minutes": "Duration of overlap between windows",
+        "overlap_ratio": "overlap_minutes / min(duration_a, duration_b)",
+        "lag_minutes": "Gap between windows if no overlap (positive = A before B)",
+        "temporal_order": "'a_first', 'b_first', 'concurrent'"
+      },
+      "example_snippet": "overlap = max(0, min(end_a, end_b) - max(start_a, start_b))\noverlap_ratio = overlap / min(dur_a, dur_b) if min(dur_a, dur_b) > 0 else 0\nlag = max(start_a, start_b) - min(end_a, end_b) if overlap == 0 else 0"
+    },
+
+    "cross_population_comparison": {
+      "name": "Cross-Population Comparison",
+      "description": "Compares a single entity's metrics against an aggregate population. Determines if the entity is an outlier or part of a broader pattern.",
+      "applicable_when": [
+        "You have per-entity data (one customer) AND population-level data (all customers)",
+        "You need to distinguish 'isolated anomaly' from 'widespread platform issue'",
+        "Both datasets share a common dimension (region, SLI category, product)"
+      ],
+      "not_applicable_when": [
+        "Only one dataset available (no population baseline to compare against)",
+        "Datasets don't share a joinable dimension"
+      ],
+      "python_libraries": ["pandas", "numpy"],
+      "inputs": {
+        "entity_data": "DataFrame with per-entity observations",
+        "population_data": "DataFrame with aggregated population observations",
+        "join_dimension": "Column(s) to join on (e.g., region, sli_category)"
+      },
+      "outputs": {
+        "entity_vs_population_ratio": "entity_metric / population_metric (closer to 1.0 = same pattern)",
+        "region_overlap_score": "Jaccard similarity of affected regions",
+        "population_affected_count": "How many entities in the population are affected"
+      },
+      "example_snippet": "entity_regions = set(df_entity['Region'].unique())\npopulation_regions = set(df_population['Region'].unique())\njaccard = len(entity_regions & population_regions) / len(entity_regions | population_regions)"
+    },
+
+    "volume_spike_detection": {
+      "name": "Volume Spike Detection",
+      "description": "Detects whether the count of events (tickets, incidents, breaches) is abnormally high. Uses count-based thresholds rather than metric-level analysis.",
+      "applicable_when": [
+        "Data represents discrete events (support requests, incidents, SLI breaches) rather than continuous metrics",
+        "You need to determine if 'many customers reporting' or 'many incidents open' constitutes a spike",
+        "The signal is in the COUNT of rows, not the VALUES within rows"
+      ],
+      "not_applicable_when": [
+        "Data is a single observation (e.g., one incident profile)",
+        "The question is about metric severity, not event volume"
+      ],
+      "python_libraries": ["pandas", "numpy"],
+      "inputs": {
+        "event_count": "Number of events (rows in dataset)",
+        "distinct_entities": "Number of distinct affected entities (customers, regions, subscriptions)",
+        "severity_distribution": "Optional: counts by severity level"
+      },
+      "outputs": {
+        "distinct_entity_count": "How many unique entities are affected",
+        "critsit_ratio": "Fraction of events flagged as CritSit/high severity",
+        "severity_weighted_count": "Events weighted by severity (Sev1=4, Sev2=3, Sev3=2, etc.)"
+      },
+      "example_snippet": "distinct_customers = df['CustomerName'].nunique()\ncritsit_count = df['IsCritSit'].sum() if 'IsCritSit' in df.columns else 0\ncritsit_ratio = critsit_count / len(df) if len(df) > 0 else 0"
+    },
+
+    "cascade_detection": {
+      "name": "Cascade / Causal Lag Detection",
+      "description": "Tests whether degradation in source A LEADS degradation in source B in time — a proxy for causal dependency. If A degrades first and B follows, A may be causing B.",
+      "applicable_when": [
+        "Two datasets each have impact start timestamps",
+        "You're testing a dependency or upstream/downstream relationship",
+        "The question involves 'is X causing Y' or 'is degradation cascading'"
+      ],
+      "not_applicable_when": [
+        "Events are simultaneous (no lag to detect)",
+        "Only one data source available",
+        "The relationship is known to be independent"
+      ],
+      "python_libraries": ["pandas", "numpy"],
+      "inputs": {
+        "upstream_start": "Earliest impact timestamp in the upstream/dependency source",
+        "downstream_start": "Earliest impact timestamp in the downstream/primary source",
+        "shared_dimension": "Region or category to verify the cascade path"
+      },
+      "outputs": {
+        "lag_minutes": "downstream_start - upstream_start (positive = upstream leads)",
+        "temporal_order_correct": "Boolean: did upstream degrade BEFORE downstream?",
+        "shared_dimension_overlap": "Jaccard similarity on the cascade path dimension"
+      },
+      "example_snippet": "lag = (pd.Timestamp(downstream_start) - pd.Timestamp(upstream_start)).total_seconds() / 60\ntemporal_order_correct = lag > 0\nregion_overlap = len(upstream_regions & downstream_regions) / len(upstream_regions | downstream_regions)"
+    },
+
+    "severity_profiling": {
+      "name": "Severity Profiling",
+      "description": "Characterizes a single entity or event by its severity attributes. Converts categorical severity fields into a numeric score.",
+      "applicable_when": [
+        "Data has severity-related columns (Severity, IsOutage, IsCritSit, IsEscalated, ChildCount)",
+        "You need to profile 'how bad' a single incident, ticket, or outage is",
+        "The evidence is a single event to characterize, not a population to aggregate"
+      ],
+      "not_applicable_when": [
+        "Data is numeric metrics (use anomaly_detection instead)",
+        "You're comparing populations (use cross_population_comparison)"
+      ],
+      "python_libraries": ["pandas"],
+      "inputs": {
+        "severity": "Numeric severity level (1-4, lower = more severe)",
+        "boolean_flags": "IsOutage, IsCritSit, IsEscalated, etc.",
+        "child_count": "Number of child/related entities"
+      },
+      "outputs": {
+        "severity_score": "Normalized 0-1 score (higher = more severe)",
+        "escalation_multiplier": "Boost factor from CritSit/escalation flags",
+        "blast_radius_score": "Score based on child count and related entities"
+      },
+      "severity_weights": {
+        "severity_1": 1.0,
+        "severity_2": 0.75,
+        "severity_3": 0.50,
+        "severity_4": 0.25
+      },
+      "boost_factors": {
+        "is_outage": 1.3,
+        "is_critsit": 1.3,
+        "is_escalated": 1.15,
+        "child_count_3plus": 1.2
+      },
+      "example_snippet": "base = {1: 1.0, 2: 0.75, 3: 0.5, 4: 0.25}.get(severity, 0.25)\nboost = 1.3 if is_outage else (1.15 if is_escalated else 1.0)\nseverity_score = min(1.0, base * boost)"
+    },
+
+    "absence_quantification": {
+      "name": "Absence / Negative Evidence Quantification",
+      "description": "Scores the significance of evidence NOT being found. Important for refutation — if a thorough search found nothing, that's evidence against the hypothesis.",
+      "applicable_when": [
+        "An evidence source returned 0 rows despite being expected",
+        "You need to distinguish 'no data because not collected' from 'no data because nothing exists'",
+        "The hypothesis would be weakened if this evidence category is genuinely empty"
+      ],
+      "not_applicable_when": [
+        "Data was not collected (ER was skipped) — use 'inconclusive' instead",
+        "Empty result is expected for this hypothesis type"
+      ],
+      "python_libraries": [],
+      "inputs": {
+        "was_collected": "Boolean: did the data_fetcher attempt this ER?",
+        "row_count": "Number of rows returned (expected: 0 for absence)",
+        "hypothesis_requires": "Is this ER in the hypothesis's evidence_needed list?"
+      },
+      "outputs": {
+        "absence_significance": "'strong_negative' | 'weak_negative' | 'neutral'",
+        "was_expected": "Boolean: was this ER required by the hypothesis?"
+      },
+      "example_snippet": "if was_collected and row_count == 0 and hypothesis_requires:\n    absence_significance = 'strong_negative'\nelse:\n    absence_significance = 'neutral'"
+    },
+
+    "breadth_scoring": {
+      "name": "Impact Breadth Scoring",
+      "description": "Scores how widespread an impact is across multiple dimensions: regions, subscriptions, resources, SLI categories. Broader impact = higher severity.",
+      "applicable_when": [
+        "Data has geographic or organizational dimensions (Region, SubscriptionId, ResourceId)",
+        "You need to quantify 'how widespread' vs. 'how severe' the impact is",
+        "Answering questions about blast radius, cross-region patterns, or multi-tenant impact"
+      ],
+      "not_applicable_when": [
+        "Data is a single scalar (one incident, one ticket)",
+        "Only one dimension exists"
+      ],
+      "python_libraries": ["pandas"],
+      "inputs": {
+        "dimension_columns": "List of columns representing breadth (Region, SubscriptionId, etc.)",
+        "count_column": "Column to aggregate (ImpactedResources, etc.)"
+      },
+      "outputs": {
+        "distinct_regions": "Number of affected regions",
+        "distinct_subscriptions": "Number of affected subscriptions",
+        "total_impacted_resources": "Sum of impacted resources",
+        "breadth_score": "Composite 0-1 score"
+      },
+      "example_snippet": "regions = df['Region'].nunique()\nresources = int(df['ImpactedResources'].sum())"
+    },
+
+    "descriptive_statistics": {
+      "name": "Descriptive Statistics (Distribution Summary)",
+      "description": "Computes basic distribution metrics for numeric columns: mean, std, percentiles (p25, p50, p75, p90). Provides a quantitative fingerprint of the data before applying specialized techniques.",
+      "applicable_when": [
+        "Data has one or more numeric columns (availability %, latency, duration, count, etc.)",
+        "You need a baseline understanding of the data distribution before deeper analysis",
+        "Useful as a first pass on any numeric dataset — always safe to apply"
+      ],
+      "not_applicable_when": [
+        "Data is entirely categorical or boolean (no numeric columns)",
+        "Dataset has 0 rows"
+      ],
+      "python_libraries": ["pandas", "numpy"],
+      "inputs": {
+        "values": "Array or DataFrame column of numeric values",
+        "column_name": "Name of the column being summarized (for labeling)"
+      },
+      "outputs": {
+        "mean": "Arithmetic mean of values",
+        "std": "Standard deviation",
+        "p25": "25th percentile (Q1)",
+        "p50": "50th percentile (median)",
+        "p75": "75th percentile (Q3)",
+        "p90": "90th percentile",
+        "min": "Minimum value",
+        "max": "Maximum value",
+        "count": "Number of non-null observations"
+      },
+      "notes": "This is a supporting technique — it characterizes the data distribution. Include its outputs in key_metrics for the ER so the reasoner has distribution context.",
+      "example_snippet": "stats = {\n    'mean': float(df[col].mean()),\n    'std': float(df[col].std()),\n    'p25': float(df[col].quantile(0.25)),\n    'p50': float(df[col].quantile(0.50)),\n    'p75': float(df[col].quantile(0.75)),\n    'p90': float(df[col].quantile(0.90)),\n    'min': float(df[col].min()),\n    'max': float(df[col].max()),\n    'count': int(df[col].count())\n}"
+    }
+  },
+
+  "composition_rules": {
+    "description": "Guidelines for the sandbox coder to select and compose techniques based on available evidence.",
+    "selection_logic": [
+      "For each loaded ER, inspect column types and row counts to determine applicable techniques",
+      "Numeric metric columns (Avg*, Min*, duration) → anomaly_detection or breadth_scoring",
+      "Timestamp columns in 2+ sources → temporal_overlap or cascade_detection",
+      "Per-entity vs. population datasets → cross_population_comparison",
+      "Event-count data (tickets, incidents) → volume_spike_detection or severity_profiling",
+      "Empty datasets → absence_quantification",
+      "Always apply breadth_scoring when Region/Subscription columns exist"
+    ],
+    "minimum_techniques": 2,
+    "maximum_techniques": 5,
+    "aggregation": {
+      "method": "per_er_metrics",
+      "notes": "Each technique produces raw computed metrics (z-scores, ratios, counts, overlaps). Report all metrics per ER in key_metrics. Do NOT compute confidence scores or weighted averages — the reasoner interprets the raw metrics."
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "_comment": "Mirrors CustomerAgent's monitoring_context.json. The Interpreter uses 'expected_services' to know when ALL services for a customer have reported an outcome — at which point the correlation buffer is flushed immediately, instead of always waiting correlation_window_minutes. Set 'enabled': false on a service or customer to exclude it from tracking.",
+  "max_wait_minutes": 30,
+  "customers": [
+    {
+      "customer_name": "BlackRock, Inc",
+      "enabled": true,
+      "expected_services": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "enabled": true
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "enabled": true
+        },
+        {
+          "service_tree_id": "49c39e84-285c-45e1-9008-ac6b217161e2",
+          "service_name": "ScaleSet Platform and Solution",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

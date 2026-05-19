@@ -11,6 +11,7 @@ class ServiceTreeIdConfig(BaseModel, extra="allow"):
     name: str = Field(..., min_length=1)
     support_product_names: list[str] = Field(default_factory=list)
     owning_tenant_names: list[str] = Field(default_factory=list)
+    enabled: bool = Field(default=True, description="If False, this service is skipped by every downstream operation.")
 
 
 class MonitoringTargetConfig(BaseModel, extra="allow"):
@@ -18,6 +19,7 @@ class MonitoringTargetConfig(BaseModel, extra="allow"):
 
     customer_name: str = Field(..., min_length=1)
     service_tree_ids: list[ServiceTreeIdConfig] = Field(default_factory=list)
+    enabled: bool = Field(default=True, description="If False, the entire customer target is skipped.")
 
 
 class MonitoringContextFileConfig(BaseModel, extra="allow"):

@@ -127,10 +127,10 @@ async def execute_python_in_sandbox(
     tracker = AgentLogger.get_instance()
     xcv = get_current_xcv() or "sandbox"
 
-    # Prepend safety preamble (handles numpy/pandas types + circular refs)
-    # Also inject XCV constant so scripts can use it for paths
-    xcv_injection = f'\nXCV = "{xcv}"\n'
-    full_code = _SANDBOX_PREAMBLE + xcv_injection + code
+    # Prepend safety preamble (handles numpy/pandas types + circular refs).
+    # XCV (and ADLS_* coordinates + per-call ADLS_TOKEN) are injected as
+    # module-level constants by SandboxClient.execute.
+    full_code = _SANDBOX_PREAMBLE + code
 
     logger.info("[SANDBOX] execute_python_in_sandbox called! code_len=%d, filename=%s, xcv=%s",
                 len(code), filename, xcv)
@@ -148,8 +148,12 @@ async def execute_python_in_sandbox(
     client = _get_client()
     try:
         logger.info("[SANDBOX] Calling client.execute...")
-       
-        result = await client.execute(code=full_code, filename=filename)
+
+        result = await client.execute(
+            code=full_code,
+            filename=filename,
+            extra_constants={"XCV": xcv},
+        )
         logger.info("[SANDBOX] Execution complete: returncode=%d, stdout_len=%d, stderr_len=%d, duration=%.2fs",
                     result.returncode, len(result.stdout), len(result.stderr), result.duration_seconds)
         tracker._emit("sandbox_execution_complete", xcv, {
@@ -176,37 +180,50 @@ async def execute_python_in_sandbox(
         return json.dumps({"success": False, "error": str(exc)})
 
 
-@tool(name="download_sandbox_file")
-async def download_sandbox_file(remote_path: str) -> str:
-    """Download a file from the sandbox container to the local filesystem.
-
-    Args:
-        remote_path: Path to the file inside the sandbox (e.g. /mnt/data/chart.png).
-
-    Returns:
-        Local file path where the file was saved.
-    """
-    tracker = AgentLogger.get_instance()
-    xcv = get_current_xcv() or "sandbox"
-
-    client = _get_client()
-    local_path = await client.download_file(remote_path)
-
-    tracker._emit("sandbox_file_downloaded", xcv, {
-        "remote_path": remote_path,
-        "local_path": local_path,
-    })
-
-    return f"File downloaded to: {local_path}"
-
-
 @tool(name="list_sandbox_files")
 async def list_sandbox_files() -> str:
-    """List all files in the sandbox /mnt/data directory.
+    """List all files for the current investigation in ADLS.
+
+    Lists everything under {ADLS_BASE_PATH}/{XCV}/ in the configured ADLS
+    Gen2 filesystem. /mnt/data is no longer used.
 
     Returns:
-        Newline-separated list of filenames.
+        Newline-separated list of ADLS paths.
     """
+    import os
+    xcv = get_current_xcv() or "sandbox"
+    base = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
+    prefix = f"{base}/{xcv}"
     client = _get_client()
-    files = await client.list_files()
+    files = await client.list_files(adls_path=prefix, recursive=True)
     return "\n".join(files) if files else "(no files)"
+
+
+@tool(name="read_sandbox_manifest")
+async def read_sandbox_manifest() -> str:
+    """Read the evidence manifest for the current investigation from ADLS.
+
+    Reads {ADLS_BASE_PATH}/{XCV}/_manifest.json which lists all evidence files
+    deposited by data_fetcher (paths, row counts, schemas, descriptions).
+    Call this BEFORE writing analysis code to discover available evidence.
+
+    Returns:
+        JSON string with the manifest content, or an error envelope if missing.
+    """
+    import os
+    xcv = get_current_xcv() or "sandbox"
+    base = os.getenv("ADLS_BASE_PATH", "runs").strip("/")
+    manifest_path = f"{base}/{xcv}/_manifest.json"
+
+    client = _get_client()
+    try:
+        content = await client.read_file(manifest_path)
+        logger.info("[SANDBOX] Read manifest: %d chars from adls:%s", len(content), manifest_path)
+        return content.strip()
+    except Exception as exc:
+        logger.warning("[SANDBOX] Manifest not found at adls:%s: %s", manifest_path, exc)
+        return json.dumps({
+            "error": f"Manifest not found at adls://{manifest_path}",
+            "suggestion": "The data_fetcher may not have deposited evidence yet. "
+                          "Use list_sandbox_files to check what files exist.",
+        })
