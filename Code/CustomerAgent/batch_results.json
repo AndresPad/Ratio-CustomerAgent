@@ -1,0 +1,457 @@
+{
+  "customer": "BlackRock, Inc",
+  "range_start": "2026-04-25T00:00:00Z",
+  "range_end": "2026-05-05T00:00:00Z",
+  "step_hours": 1,
+  "total_windows": 240,
+  "completed": 39,
+  "successes": 5,
+  "failures": 34,
+  "results": [
+    {
+      "window": 1,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T00:00:00Z",
+        "end_time": "2026-04-25T01:00:00Z"
+      },
+      "status": 200,
+      "response": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "xcv": "e6aa45b4-d709-4efc-bce8-17ffc4a1f3c3"
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "xcv": "db2b134c-e09b-4ee4-9dda-fa3dccfa5352"
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T01:00:00Z",
+        "end_time": "2026-04-25T02:00:00Z"
+      },
+      "status": 200,
+      "response": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "xcv": "796dd9a4-875a-47d3-bf85-73535f35bed8"
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "xcv": "713ae877-b019-4a4b-a299-81ed7641f063"
+        }
+      ]
+    },
+    {
+      "window": 3,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T02:00:00Z",
+        "end_time": "2026-04-25T03:00:00Z"
+      },
+      "status": 200,
+      "response": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "xcv": "6b0d7b2c-084c-4855-8da0-ecd003e7f956"
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "xcv": "df55408e-0d72-459f-891d-494644d6c9cb"
+        }
+      ]
+    },
+    {
+      "window": 4,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T03:00:00Z",
+        "end_time": "2026-04-25T04:00:00Z"
+      },
+      "status": 200,
+      "response": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "xcv": "deeceebd-d2ab-4151-8c1a-d25429ff8179"
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "xcv": "8541eb7d-4118-4f4a-9c09-9ccb9f42dde3"
+        }
+      ]
+    },
+    {
+      "window": 5,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T04:00:00Z",
+        "end_time": "2026-04-25T05:00:00Z"
+      },
+      "status": 200,
+      "response": [
+        {
+          "service_tree_id": "db348eb2-16db-44b3-b867-f60f7cfb87d4",
+          "service_name": "SQL Connectivity",
+          "xcv": "d0b99387-7198-43b9-b082-f8834318d551"
+        },
+        {
+          "service_tree_id": "f1d1800e-d38e-41f2-b63c-72d59ecaf9c0",
+          "service_name": "Azure Kubernetes Service",
+          "xcv": "282396c8-65bc-4100-ae79-8817aa423e6d"
+        }
+      ]
+    },
+    {
+      "window": 6,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T05:00:00Z",
+        "end_time": "2026-04-25T06:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 7,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T06:00:00Z",
+        "end_time": "2026-04-25T07:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 8,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T07:00:00Z",
+        "end_time": "2026-04-25T08:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 9,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T08:00:00Z",
+        "end_time": "2026-04-25T09:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 10,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T09:00:00Z",
+        "end_time": "2026-04-25T10:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 11,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T10:00:00Z",
+        "end_time": "2026-04-25T11:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 12,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T11:00:00Z",
+        "end_time": "2026-04-25T12:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 13,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T12:00:00Z",
+        "end_time": "2026-04-25T13:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 14,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T13:00:00Z",
+        "end_time": "2026-04-25T14:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 15,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T14:00:00Z",
+        "end_time": "2026-04-25T15:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 16,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T15:00:00Z",
+        "end_time": "2026-04-25T16:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 17,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T16:00:00Z",
+        "end_time": "2026-04-25T17:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 18,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T17:00:00Z",
+        "end_time": "2026-04-25T18:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 19,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T18:00:00Z",
+        "end_time": "2026-04-25T19:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 20,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T19:00:00Z",
+        "end_time": "2026-04-25T20:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 21,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T20:00:00Z",
+        "end_time": "2026-04-25T21:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 22,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T21:00:00Z",
+        "end_time": "2026-04-25T22:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 23,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T22:00:00Z",
+        "end_time": "2026-04-25T23:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 24,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-25T23:00:00Z",
+        "end_time": "2026-04-26T00:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 25,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T00:00:00Z",
+        "end_time": "2026-04-26T01:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 26,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T01:00:00Z",
+        "end_time": "2026-04-26T02:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 27,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T02:00:00Z",
+        "end_time": "2026-04-26T03:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 28,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T03:00:00Z",
+        "end_time": "2026-04-26T04:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 29,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T04:00:00Z",
+        "end_time": "2026-04-26T05:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 30,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T05:00:00Z",
+        "end_time": "2026-04-26T06:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 31,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T06:00:00Z",
+        "end_time": "2026-04-26T07:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 32,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T07:00:00Z",
+        "end_time": "2026-04-26T08:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 33,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T08:00:00Z",
+        "end_time": "2026-04-26T09:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 34,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T09:00:00Z",
+        "end_time": "2026-04-26T10:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 35,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T10:00:00Z",
+        "end_time": "2026-04-26T11:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 36,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T11:00:00Z",
+        "end_time": "2026-04-26T12:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 37,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T12:00:00Z",
+        "end_time": "2026-04-26T13:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 38,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T13:00:00Z",
+        "end_time": "2026-04-26T14:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    },
+    {
+      "window": 39,
+      "input": {
+        "customer_name": "BlackRock, Inc",
+        "start_time": "2026-04-26T14:00:00Z",
+        "end_time": "2026-04-26T15:00:00Z"
+      },
+      "status": 403,
+      "error": "RBAC: access denied"
+    }
+  ]
+}

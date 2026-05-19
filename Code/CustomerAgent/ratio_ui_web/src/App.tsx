@@ -9,7 +9,6 @@ import AgentDevUIPage from './pages/AgentDevUIPage';
 import DevUIEmbedPage from './pages/DevUIEmbedPage';
 import ChaLayout from './pages/customer-agent/ChaLayout';
 import ChaHomePage from './pages/customer-agent/ChaHomePage';
-import ChaScenariosPage from './pages/customer-agent/ChaScenariosPage';
 import ChaActivePage from './pages/customer-agent/ChaActivePage';
 import ChaLivePage from './pages/customer-agent/ChaLivePage';
 import ChaTheatrePage from './pages/customer-agent/ChaTheatrePage';
@@ -24,6 +23,7 @@ import ChaNeuralCanvasPage from './pages/customer-agent/ChaNeuralCanvasPage';
 import ChaNeuralCanvasV2Page from './pages/customer-agent/ChaNeuralCanvasV2Page';
 import ChaNeuralCanvasDemoPage from './pages/customer-agent/ChaNeuralCanvasDemoPage';
 import ChaNeuralCanvasLivePage from './pages/customer-agent/ChaNeuralCanvasLivePage';
+import ChaTraceTailPage from './pages/customer-agent/ChaTraceTailPage';
 
 class ErrorBoundaryInner extends Component<{ children: ReactNode; location: string }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -73,7 +73,7 @@ function AppLayout() {
         <Routes>
           <Route path="/customer-agent" element={<ChaLayout />}>
             <Route index element={<ChaHomePage />} />
-            <Route path="scenarios" element={<ChaScenariosPage />} />
+            <Route path="scenarios" element={<Navigate to="/customer-agent/active" replace />} />
             <Route path="live" element={<ChaLivePage />} />
             <Route path="active" element={<ChaActivePage />} />
             <Route path="theatre" element={<ChaTheatrePage />} />
@@ -91,6 +91,7 @@ function AppLayout() {
             <Route path="neural-canvas-demo/:xcv" element={<ChaNeuralCanvasDemoPage />} />
             <Route path="neural-canvas-live" element={<ChaNeuralCanvasLivePage />} />
             <Route path="neural-canvas-live/:xcv" element={<ChaNeuralCanvasLivePage />} />
+            <Route path="trace-tail/:xcv" element={<ChaTraceTailPage />} />
             <Route path="investigation-flow/deep-dive" element={<ChaFlowDetailPage />} />
             <Route path="investigation-flow/:xcv" element={<ChaFlowDetailPage />} />
           </Route>

@@ -27,7 +27,7 @@ The design follows the **config-driven agent factory** pattern already establish
 │  │ orchestrator │───►│ sandbox_coder                    │    │
 │  │ (GroupChat)  │    │  tool_mode: "sandbox"            │    │
 │  └──────┬──────┘    │  tools: execute_python_in_sandbox│    │
-│         │           │         download_sandbox_file    │    │
+
 │         │           │         list_sandbox_files       │    │
 │         ▼           └──────────────┬───────────────────┘    │
 │  [other agents]                    │                        │
@@ -366,30 +366,6 @@ async def execute_python_in_sandbox(
         })
 
 
-@tool(name="download_sandbox_file")
-async def download_sandbox_file(remote_path: str) -> str:
-    """Download a file from the sandbox container to the local filesystem.
-
-    Args:
-        remote_path: Path to the file inside the sandbox (e.g. /mnt/data/chart.png).
-
-    Returns:
-        Local file path where the file was saved.
-    """
-    tracker = AgentLogger.get_instance()
-    xcv = get_current_xcv()
-
-    client = _get_client()
-    local_path = await client.download_file(remote_path)
-
-    tracker.emit(xcv, "sandbox_file_downloaded", {
-        "remote_path": remote_path,
-        "local_path": local_path,
-    })
-
-    return f"File downloaded to: {local_path}"
-
-
 @tool(name="list_sandbox_files")
 async def list_sandbox_files() -> str:
     """List all files in the sandbox /mnt/data directory.
@@ -438,7 +414,6 @@ and execute it in a secure sandbox container.
 ## Tools Available
 
 - **execute_python_in_sandbox**: Run Python code and get stdout/stderr/files back.
-- **download_sandbox_file**: Download a generated file from the sandbox.
 - **list_sandbox_files**: See what files exist in /mnt/data.
 
 ## Guidelines
@@ -463,10 +438,9 @@ def _tool_mode_sandbox(agent_cfg: dict[str, Any], ctx: dict[str, Any]) -> list:
     """Return sandbox @tool functions for agents with tool_mode='sandbox'."""
     from core.sandbox.tools import (
         execute_python_in_sandbox,
-        download_sandbox_file,
         list_sandbox_files,
     )
-    return [execute_python_in_sandbox, download_sandbox_file, list_sandbox_files]
+    return [execute_python_in_sandbox, list_sandbox_files]
 ```
 
 And register it:
@@ -691,7 +665,6 @@ SSE events emitted by the sandbox tools via `AgentLogger.emit()`. All events fol
 | `sandbox_code_generated` | `{ code: str, filename: str }` | `execute_python_in_sandbox` (before execution) | Create execution card, render code block |
 | `sandbox_execution_started` | `{ filename: str }` | `execute_python_in_sandbox` | Set status to "Running" |
 | `sandbox_execution_complete` | `{ returncode: int, stdout: str, stderr: str, files: list[str], duration_seconds: float, success: bool }` | `execute_python_in_sandbox` | Populate output sections, set final status |
-| `sandbox_file_downloaded` | `{ remote_path: str, local_path: str }` | `download_sandbox_file` | Mark file as downloaded in files list |
 | `sandbox_error` | `{ error: str, filename: str }` | `execute_python_in_sandbox` (on exception) | Show error state |
 
 These events are automatically picked up by the SSE stream because they flow through the existing `AgentLogger` → `subscribe_events` → SSE pipeline. No changes to the SSE infrastructure needed.
@@ -755,7 +728,7 @@ Steps 1–4 and 5–7 can be parallelized. Steps 8–11 can also be done in para
 |---|---|---|
 | `src/core/sandbox/__init__.py` | **New** | Package init for sandbox module |
 | `src/core/sandbox/client.py` | **New** | `SandboxClient` — HTTP wrapper for PythonCustomPool API |
-| `src/core/sandbox/tools.py` | **New** | `@tool` functions: `execute_python_in_sandbox`, `download_sandbox_file`, `list_sandbox_files` |
+| `src/core/sandbox/tools.py` | **New** | `@tool` functions: `execute_python_in_sandbox`, `list_sandbox_files` |
 | `src/core/agent_factory.py` | **Edit** | Add `_tool_mode_sandbox()` handler + register in `TOOL_MODE_HANDLERS` dict (~8 lines) |
 | `src/prompts/maf_sandbox_coder_prompt.txt` | **New** | System prompt for the sandbox_coder agent |
 | `src/config/agents/agents_config.json` | **Edit** | Add `sandbox_coder` agent entry + add to `workflow.participants` |

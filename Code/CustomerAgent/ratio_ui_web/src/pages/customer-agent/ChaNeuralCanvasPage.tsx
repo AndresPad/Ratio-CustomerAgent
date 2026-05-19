@@ -14,7 +14,7 @@
  * progress fill per service (X% \u00b7 currently on stage Y).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import {
   WorkflowCanvas,
   N8nWorkflowGraph,
@@ -76,6 +76,46 @@ interface ServiceProgress {
 
 export default function ChaNeuralCanvasPage() {
   const { xcv: paramXcv } = useParams<{ xcv: string }>();
+  // When the user opens this page from `StartInvestigationModal` or the
+  // Scheduler panel's Canvas button, the caller passes the fresh service
+  // info — either via React Router state (same-tab navigation) or via
+  // URL query params (?service=…&svcId=…&customer=…) so `window.open`
+  // new-tab navigations still carry the context. In that case we want
+  // to short-circuit the static April-16 demo-window query and render
+  // only this one fresh xcv so it actually plays out live.
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const freshFromStart = useMemo(() => {
+    const state = (location.state ?? null) as
+      | {
+          freshXcv?: string;
+          service_name?: string;
+          service_tree_id?: string;
+        }
+      | null;
+    const stateXcv = state?.freshXcv;
+    const stateServiceTreeId = state?.service_tree_id;
+
+    // Query-param fallback for window.open / new-tab navigations.
+    const qpServiceTreeId = searchParams.get('svcId');
+    const qpServiceName = searchParams.get('service');
+
+    if (paramXcv && stateXcv && stateServiceTreeId) {
+      return {
+        xcv: stateXcv,
+        service_name: state?.service_name || stateServiceTreeId,
+        service_tree_id: stateServiceTreeId,
+      };
+    }
+    if (paramXcv && qpServiceTreeId) {
+      return {
+        xcv: paramXcv,
+        service_name: qpServiceName || qpServiceTreeId,
+        service_tree_id: qpServiceTreeId,
+      };
+    }
+    return null;
+  }, [location.state, paramXcv, searchParams]);
 
   const [view] = useState<ViewMode>('graph');
   const [serviceOptions, setServiceOptions] = useState<ReplayServiceOption[]>([]);
@@ -137,10 +177,26 @@ export default function ChaNeuralCanvasPage() {
   // Periodically refresh the service list. In mock mode we skip the
   // network call entirely and use the canonical mock service list
   // (SQL / AKS / VM / OpenAI) so the demo stays deterministic.
+  // When `freshFromStart` is set (user came from the Start modal), skip
+  // the demo-window query and render only that one fresh service so
+  // their actual run plays out instead of the static April-16 replay.
   const mode = useNeuralCanvasMode();
   useEffect(() => {
     if (mode === 'mock') {
       setServiceOptions(MOCK_SERVICE_OPTIONS);
+      setServicesLoading(false);
+      setServicesError(null);
+      return;
+    }
+
+    if (freshFromStart) {
+      setServiceOptions([
+        {
+          xcv: freshFromStart.xcv,
+          service_name: freshFromStart.service_name,
+          service_tree_id: freshFromStart.service_tree_id,
+        },
+      ]);
       setServicesLoading(false);
       setServicesError(null);
       return;
@@ -173,7 +229,7 @@ export default function ChaNeuralCanvasPage() {
       alive = false;
       window.clearInterval(t);
     };
-  }, [mode]);
+  }, [mode, freshFromStart]);
 
   // Pick a default active service when the list first arrives or when the
   // current selection disappears. Prefer the URL xcv param if it matches

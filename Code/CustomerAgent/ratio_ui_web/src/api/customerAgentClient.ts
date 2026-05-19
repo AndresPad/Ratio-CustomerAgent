@@ -1,8 +1,18 @@
 /**
- * API client for the CustomerAgent investigation service (port 8020).
+ * API client for the CustomerAgent investigation service (local backend, port 8503).
  *
- * In dev mode Vite proxies `/customer-agent-api` → `http://127.0.0.1:8020`
+ * In dev mode Vite proxies `/customer-agent-api` → `http://127.0.0.1:8503`
  * (configured in vite.config.ts).
+ *
+ * This file is the "legacy" client that drove the old scenario-fixture-runner
+ * UI (Active page picker, scenario history, etc). Several functions in here
+ * have been retired now that the page surfaces are driven by the cloud
+ * /api/run/services endpoint and the new investigations + traces REST routes.
+ *
+ * If you're adding new investigation-related calls, prefer:
+ *   • `investigationsClient.ts`  — Cosmos-backed REST + SSE for the new UI
+ *   • `orchestrationSource.ts`   — replay/live event streams
+ *   • `traceClient.ts`           — Log Analytics trace events
  */
 
 const PREFIX = '/customer-agent-api';
@@ -43,25 +53,6 @@ export interface AgentInfo {
   tool_names: string[];
 }
 
-export interface InvestigationEvent {
-  event_type: 'investigation_started' | 'phase_change' | 'agent_turn' | 'evidence_collected' | 'investigation_complete' | 'error' | 'done';
-  agent_name: string;
-  phase: string;
-  content: string;
-  data: Record<string, unknown>;
-  timestamp: string;
-}
-
-export interface PastInvestigation {
-  id: string;
-  scenario_id: string;
-  phase: string;
-  started_at: string;
-  completed_at: string;
-  hypothesis_count: number;
-  evidence_count: number;
-}
-
 export interface ConfigItem {
   [key: string]: unknown;
 }
@@ -83,31 +74,14 @@ export interface KnowledgeFile {
 
 /* ── API calls ─────────────────────────────────────────── */
 
-export async function getHealth(): Promise<{ status: string }> {
-  return oaFetch('/health');
-}
-
 export async function listScenarios(): Promise<Scenario[]> {
   const data = await oaFetch<{ scenarios: Scenario[] }>('/api/scenarios');
   return data.scenarios;
 }
 
-export async function getScenario(id: string): Promise<Scenario> {
-  return oaFetch(`/api/scenarios/${id}`);
-}
-
 export async function listAgents(): Promise<AgentInfo[]> {
   const data = await oaFetch<{ agents: AgentInfo[] }>('/api/agents');
   return data.agents;
-}
-
-export async function listInvestigations(): Promise<PastInvestigation[]> {
-  const data = await oaFetch<{ investigations: PastInvestigation[] }>('/api/investigations');
-  return data.investigations;
-}
-
-export async function getInvestigation(id: string): Promise<Record<string, unknown>> {
-  return oaFetch(`/api/investigations/${id}`);
 }
 
 export async function getConfigTab(tab: string): Promise<ConfigItem[]> {
@@ -136,55 +110,4 @@ export async function listKnowledge(): Promise<KnowledgeFile[]> {
 
 export async function getKnowledgeContent(name: string): Promise<{ title: string; content: string }> {
   return oaFetch(`/api/knowledge/${encodeURIComponent(name)}`);
-}
-
-/**
- * Start an investigation and stream SSE events.
- * Yields parsed InvestigationEvent objects.
- *
- * @param scenarioId - The scenario to investigate.
- * @param signal - Optional AbortSignal to cancel the stream.
- */
-export async function* streamInvestigation(
-  scenarioId: string,
-  signal?: AbortSignal,
-): AsyncGenerator<InvestigationEvent> {
-  const res = await fetch(`${PREFIX}/api/investigate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scenario_id: scenarioId }),
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`Failed to start investigation: ${res.status}`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      while (buffer.includes('\n\n')) {
-        const idx = buffer.indexOf('\n\n');
-        const chunk = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('data: ')) {
-            try {
-              yield JSON.parse(line.slice(6)) as InvestigationEvent;
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }

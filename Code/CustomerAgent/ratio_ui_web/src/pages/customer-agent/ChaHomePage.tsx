@@ -1,112 +1,176 @@
+/**
+ * ChaHomePage — landing page for the customer-agent area.
+ *
+ * Lightweight overview + navigation cards. Intentionally does NOT depend
+ * on the legacy `listScenarios()` / `listAgents()` endpoints that 404 on
+ * the current backend — those calls used to live here and silently caught
+ * their errors, leaving the page mostly empty anyway.
+ */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listScenarios, listAgents, type Scenario } from '../../api/customerAgentClient';
+import { listAgents, type AgentInfo } from '../../api/customerAgentClient';
 
-export default function ChaHomePage() {
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [agentCount, setAgentCount] = useState(0);
+interface QuickCard {
+  to: string;
+  icon: string;
+  iconColor: string;
+  title: string;
+  description: string;
+}
+
+const QUICK_CARDS: QuickCard[] = [
+  {
+    to: '/customer-agent/active',
+    icon: 'fa-play-circle',
+    iconColor: '#fbbf24',
+    title: 'Active Investigation',
+    description:
+      'Trigger a fresh investigation on the CustomerAgent service. Returns one xcv per impacted service.',
+  },
+  {
+    to: '/customer-agent/history',
+    icon: 'fa-history',
+    iconColor: '#60a5fa',
+    title: 'Investigation History',
+    description:
+      'Browse past investigations from Cosmos. Filter by customer, decision, and confidence.',
+  },
+  {
+    to: '/customer-agent/neural-canvas-live',
+    icon: 'fa-circle-nodes',
+    iconColor: '#a78bfa',
+    title: 'Neural Canvas — Live',
+    description:
+      'Watch agent topology, hypotheses, and sandbox execution as the agent works through real Log Analytics traces.',
+  },
+  {
+    to: '/customer-agent/agents',
+    icon: 'fa-robot',
+    iconColor: '#34d399',
+    title: 'Agent Registry',
+    description: 'Inspect the agents in the Microsoft Agent Framework workflow.',
+  },
+  {
+    to: '/customer-agent/knowledge',
+    icon: 'fa-book',
+    iconColor: '#f472b6',
+    title: 'Knowledge Base',
+    description: 'Hypothesis catalog and supporting context the reasoner draws from.',
+  },
+  {
+    to: '/customer-agent/data',
+    icon: 'fa-database',
+    iconColor: '#22d3ee',
+    title: 'Data Files',
+    description: 'Reference signal/symptom/evidence data used by the investigation runner.',
+  },
+];
+
+export default function ChaHomePage(): JSX.Element {
+  const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    listScenarios().then(setScenarios).catch(() => {});
-    listAgents().then(a => setAgentCount(a.length)).catch(() => {});
+    listAgents()
+      .then(setAgents)
+      .catch(() => setAgents(null));
   }, []);
 
-  const now = new Date();
-  const hour = now.getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-  // Build the time portion explicitly (12-hour clock with AM/PM) so the
-  // string is guaranteed non-empty regardless of how the runtime resolves
-  // toLocaleTimeString options. A previous version using
-  //   now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  // could render blank in some environments.
-  const rawHour = now.getHours();
-  const ampm = rawHour >= 12 ? 'PM' : 'AM';
-  const displayHour = rawHour % 12 === 0 ? 12 : rawHour % 12;
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const timeStr = `${displayHour}:${minutes} ${ampm}`;
-
-  const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} \u00b7 ${timeStr}`;
-
-  const featured = scenarios.slice(0, 3);
-
   return (
-    <>
-      {/* Greeting */}
-      <div className="cha-greeting">
-        <div>
-          <h2>{greeting}</h2>
-          <p className="cha-greeting-date">{dateStr}</p>
-        </div>
-        <button className="cha-btn-primary" onClick={() => navigate('/customer-agent/scenarios')}>
-          <i className="fas fa-play" /> Quick Start — Run Scenario
-        </button>
+    <div style={{ padding: '20px 16px', maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>
+          <i
+            className="fas fa-brain"
+            style={{ color: '#a78bfa', marginRight: 10 }}
+          />
+          Customer Agent
+        </h2>
+        <p
+          style={{
+            margin: '6px 0 0',
+            fontSize: 13,
+            color: 'var(--cha-text-muted, #9ca3af)',
+            maxWidth: 760,
+          }}
+        >
+          A multi-agent investigation pipeline built on the Microsoft Agent
+          Framework. Trigger live investigations against the cloud
+          CustomerAgent service, browse historical runs from Cosmos, and
+          watch reasoning unfold via Log Analytics in the Neural Canvas.
+        </p>
+        {agents && (
+          <div
+            style={{
+              marginTop: 10,
+              fontSize: 12,
+              color: 'var(--cha-text-muted, #9ca3af)',
+            }}
+          >
+            <i className="fas fa-circle-check" style={{ color: '#22c55e', marginRight: 4 }} />
+            {agents.length} agents registered
+          </div>
+        )}
       </div>
 
-      {/* Status badges */}
-      <div style={{ display: 'flex', gap: 10, padding: '12px 0 16px', flexWrap: 'wrap' }}>
-        <span className="cha-badge cha-badge-info">{scenarios.length} scenarios available</span>
-        <span className="cha-badge cha-badge-watching">{agentCount} agents configured</span>
-        <span className="cha-badge cha-badge-handled">Simulation mode</span>
-      </div>
-
-      {/* Architecture overview */}
-      <div className="cha-insights">
-        <div className="cha-insight">
-          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <strong>Agent Architecture: </strong>
-            Multi-agent GroupChat orchestration using Microsoft Agent Framework. Abductive reasoning loop: Signal → Symptom → Hypothesis → Evidence → Reasoning → Action → Verification.
-          </div>
-          <div className="cha-actions">
-            <button className="cha-insight-link" onClick={() => navigate('/customer-agent/scenarios')}>Browse scenarios ›</button>
-            <span className="cha-status-tag watching"><i className="fas fa-robot" style={{ marginRight: 4 }} /> GPT-4o + o1 (Reasoner)</span>
-          </div>
-        </div>
-        <div className="cha-insight">
-          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <strong>Agents: </strong>
-            Orchestrator · Triage · Hypothesis Selector · Evidence Planner · Telemetry Agent · Outage Agent · Support Agent · Advisor Agent · Resource Agent · Reasoner (o1) · Action Planner · Notification Agent
-          </div>
-          <div className="cha-actions">
-            <span className="cha-status-tag success"><i className="fas fa-check" style={{ marginRight: 4 }} /> All agents loaded from YAML config</span>
-          </div>
-        </div>
-        <div className="cha-insight">
-          <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-            <strong>Reasoning Loop: </strong>
-            Three checkpoints drive iterative deepening. Checkpoint 1: new questions after evidence? Checkpoint 2: all hypotheses resolved? Checkpoint 3: verification passed? Loop-backs expand the investigation when new information emerges.
-          </div>
-        </div>
-      </div>
-
-      {/* Featured Scenarios */}
-      <div style={{ padding: '8px 0 24px' }}>
-        <div className="cha-section-header">
-          <div className="cha-section-title"><span className="cha-live-dot" /> FEATURED SCENARIOS</div>
-          <button className="cha-insight-link" onClick={() => navigate('/customer-agent/scenarios')}>View all scenarios</button>
-        </div>
-        <div className="cha-card-grid">
-          {featured.map(s => (
-            <div key={s.id} className="cha-card" onClick={() => navigate('/customer-agent/scenarios')}>
-              <div className="cha-card-header">
-                <div className="cha-card-title">
-                  <span className="cha-card-dot" style={{ background: '#f0ad4e' }} />
-                  {s.name}
-                </div>
-              </div>
-              <div className="cha-card-body">
-                <div style={{ marginBottom: 8 }}>
-                  <span className="cha-metric singular">{s.category}</span>
-                </div>
-                <div className="cha-card-desc">{s.description.slice(0, 120)}…</div>
-              </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 14,
+        }}
+      >
+        {QUICK_CARDS.map((card) => (
+          <button
+            type="button"
+            key={card.to}
+            onClick={() => navigate(card.to)}
+            style={{
+              textAlign: 'left',
+              background: 'var(--cha-panel-bg, #1f2937)',
+              color: 'var(--cha-text, #f3f4f6)',
+              border: '1px solid var(--cha-border, #374151)',
+              borderRadius: 10,
+              padding: 16,
+              cursor: 'pointer',
+              transition: 'transform 120ms ease, border-color 120ms ease',
+              outline: 'none',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-2px)';
+              e.currentTarget.style.borderColor = '#6b7280';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.borderColor = 'var(--cha-border, #374151)';
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                marginBottom: 8,
+                gap: 10,
+              }}
+            >
+              <i
+                className={`fas ${card.icon}`}
+                style={{ color: card.iconColor, fontSize: 18 }}
+              />
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{card.title}</span>
             </div>
-          ))}
-        </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--cha-text-muted, #9ca3af)',
+                lineHeight: 1.45,
+              }}
+            >
+              {card.description}
+            </div>
+          </button>
+        ))}
       </div>
-    </>
+    </div>
   );
 }

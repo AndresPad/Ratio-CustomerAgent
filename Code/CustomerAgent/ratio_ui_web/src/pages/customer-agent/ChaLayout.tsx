@@ -5,7 +5,6 @@ import './cha-theme.css';
 
 const PAGE_TITLES: Record<string, string> = {
   '': 'Home',
-  'scenarios': 'Simulation Scenarios',
   'live': 'Live Orchestration',
   'active': 'Active Investigation',
   'theatre': 'Investigation Theatre',
@@ -15,7 +14,8 @@ const PAGE_TITLES: Record<string, string> = {
   'neural-canvas': 'Neural Canvas',
   'neural-canvas-demo': 'Neural Canvas - Demo',
   'neural-canvas-live': 'Neural Canvas - Live',
-  'history': 'History',
+  'trace-tail': 'Live Trace Tail',
+  'history': 'Investigation History',
   'agents': 'Agent Registry',
   'config': 'Configuration',
   'data': 'Data Files',
@@ -38,8 +38,7 @@ const NAV: readonly NavItem[] = [
   { to: 'neural-canvas-live', icon: 'fa-circle-nodes',    label: 'Neural Canvas - Live' },
   { section: 'INVESTIGATIONS' },
   { to: 'active',    icon: 'fa-play-circle', label: 'Active Investigation' },
-  { to: 'scenarios', icon: 'fa-flask',       label: 'Simulation Scenarios' },
-  { to: 'history',   icon: 'fa-history',     label: 'History' },
+  { to: 'history',   icon: 'fa-history',     label: 'Investigation History' },
   { section: 'AGENT FRAMEWORK' },
   { to: 'agents', icon: 'fa-robot',      label: 'Agent Registry' },
   { to: 'config', icon: 'fa-sliders-h',  label: 'Configuration' },
@@ -72,8 +71,11 @@ export default function ChaLayout() {
         <button className="cha-strip-icon" title="Home" onClick={() => navigate('/customer-agent')}>
           <i className="fas fa-home" />
         </button>
-        <button className="cha-strip-icon" title="Scenarios" onClick={() => navigate('/customer-agent/scenarios')}>
-          <i className="fas fa-flask" />
+        <button className="cha-strip-icon" title="Active Investigation" onClick={() => navigate('/customer-agent/active')}>
+          <i className="fas fa-play-circle" />
+        </button>
+        <button className="cha-strip-icon" title="Investigation History" onClick={() => navigate('/customer-agent/history')}>
+          <i className="fas fa-history" />
         </button>
         <button className="cha-strip-icon" title="Back to Ratio AI" onClick={() => navigate('/')}>
           <i className="fas fa-arrow-left" />

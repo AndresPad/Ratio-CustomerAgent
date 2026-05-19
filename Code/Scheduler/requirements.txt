@@ -1,0 +1,4 @@
+# Pinned versions for reproducible Container Apps Job runs.
+# Bumping these is a deploy event; keep deliberate.
+httpx==0.27.2
+azure-identity==1.19.0

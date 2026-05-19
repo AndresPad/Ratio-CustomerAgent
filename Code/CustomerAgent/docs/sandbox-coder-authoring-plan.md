@@ -103,7 +103,6 @@ If you respond with text instead of a tool_call, your response is INVALID.
 
 - **execute_python_in_sandbox**: Run Python code and get stdout/stderr/files back.
   YOU MUST CALL THIS TOOL. Do not just write code as text.
-- **download_sandbox_file**: Download a generated file from the sandbox.
 - **list_sandbox_files**: See what files exist in /mnt/data.
 
 ## Execution Flow
@@ -143,8 +142,7 @@ TOOLS AVAILABLE
 
 - **execute_python_in_sandbox**: Run Python code and get stdout/stderr/files.
   YOU MUST CALL THIS TOOL. Do not respond with code as text.
-- **download_sandbox_file**: Download a generated file from /mnt/data/.
-- **list_sandbox_files**: List files in /mnt/data/.
+- **list_sandbox_files**: List files in /mnt/data.
 
 ═══════════════════════════════════════════════════════════════════
 CRITICAL RULES
